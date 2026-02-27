@@ -1,0 +1,60 @@
+########################################################
+# kube-agent deployment values
+# Override default chart values for specific environment
+########################################################
+specs:
+  kube-agent:
+    enabled: true
+
+    image:
+      repository: docker.io/srrain98/kube-agent
+      tag: "0.1.0"
+      pullPolicy: IfNotPresent
+
+    env:
+      # LLM 설정
+      - name: KUBE_AGENT_LLM_URL
+        value: "http://litellm.litellm.svc.cluster.local:4000/v1"
+      - name: KUBE_AGENT_LLM_MODEL
+        value: "qwen3-next-80b-instruct-fp8"
+      - name: KUBE_AGENT_LLM_API_KEY
+        valueFrom:
+          secretKeyRef:
+            name: kube-agent-secrets
+            key: llm-api-key
+            optional: true
+      # Gitea 설정
+      - name: KUBE_AGENT_GITEA_URL
+        value: "http://gitea.ops.svc.cluster.local:3000"
+      - name: KUBE_AGENT_GITEA_TOKEN
+        valueFrom:
+          secretKeyRef:
+            name: kube-agent-secrets
+            key: gitea-token
+            optional: true
+      - name: KUBE_AGENT_GITEA_TIMEOUT
+        value: "30"
+      # Kubernetes 설정
+      - name: KUBE_AGENT_NAMESPACE
+        valueFrom:
+          fieldRef:
+            fieldPath: metadata.namespace
+      # 에이전트 루프 설정
+      - name: KUBE_AGENT_MAX_MESSAGES
+        value: "80"
+      - name: KUBE_AGENT_MAX_TOOL_ITERATIONS
+        value: "30"
+      - name: KUBE_AGENT_MAX_AUTO_CONTINUE
+        value: "5"
+      - name: KUBE_AGENT_TOOL_RESULT_MAX_CHARS
+        value: "3000"
+
+    # Auto-generate secrets (change these values to your actual credentials)
+    extraResources:
+      - apiVersion: v1
+        kind: Secret
+        metadata:
+          name: kube-agent-secrets
+        stringData:
+          llm-api-key: "sk-test-litellm-qwer1234"  # LiteLLM API key
+          gitea-token: "REPLACE_WITH_GITEA_TOKEN"   # Gitea personal access token

@@ -1,0 +1,167 @@
+{{- range $name, $spec := .Values.specs }}
+{{- if ne $spec.enabled false }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "blueprint.fullname" (dict "root" $ "name" $name "spec" $spec) }}
+  labels:
+    {{- include "blueprint.labels" (dict "root" $ "name" $name "spec" $spec) | nindent 4 }}
+spec:
+  {{- if not (and $spec.autoscaling $spec.autoscaling.enabled) }}
+  replicas: {{ $spec.replicaCount | default 1 }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "blueprint.selectorLabels" (dict "root" $ "name" $name "spec" $spec) | nindent 6 }}
+  template:
+    metadata:
+      {{- with $spec.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      labels:
+        {{- include "blueprint.labels" (dict "root" $ "name" $name "spec" $spec) | nindent 8 }}
+        {{- with $spec.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      {{- with $.Values.global.imagePullSecrets | default $spec.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- if and $spec.serviceAccount $spec.serviceAccount.create }}
+      serviceAccountName: {{ include "blueprint.serviceAccountName" (dict "root" $ "name" $name "spec" $spec) }}
+      {{- end }}
+      {{- if hasKey $spec "hostNetwork" }}
+      hostNetwork: {{ $spec.hostNetwork }}
+      {{- end }}
+      {{- if hasKey $spec "dnsPolicy" }}
+      dnsPolicy: {{ $spec.dnsPolicy }}
+      {{- end }}
+      {{- with $spec.podSecurityContext }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $spec.initContainers }}
+      initContainers:
+        {{- range . }}
+        - name: {{ .name }}
+          {{- if kindIs "string" .image }}
+          image: {{ .image }}
+          {{- else }}
+          image: "{{ $.Values.global.imageRegistry | default "" }}{{ with $.Values.global.imageRegistry }}{{ "/" }}{{ end }}{{ .image.repository }}:{{ .image.tag }}"
+          {{- end }}
+          {{- if .imagePullPolicy }}
+          imagePullPolicy: {{ .imagePullPolicy }}
+          {{- end }}
+          {{- with .command }}
+          command:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .args }}
+          args:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .env }}
+          env:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .envFrom }}
+          envFrom:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .volumeMounts }}
+          volumeMounts:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .securityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+        {{- end }}
+      {{- end }}
+      containers:
+        - name: {{ $name }}
+          {{- with $spec.containerSecurityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          image: "{{ $.Values.global.imageRegistry | default "" }}{{ with $.Values.global.imageRegistry }}{{ "/" }}{{ end }}{{ $spec.image.repository }}:{{ $spec.image.tag }}"
+          imagePullPolicy: {{ $spec.image.pullPolicy | default "IfNotPresent" }}
+          {{- with $spec.command }}
+          command:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with $spec.args }}
+          args:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with $spec.lifecycle }}
+          lifecycle:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with $spec.envFrom }}
+          envFrom:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with $spec.env }}
+          env:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- if and $spec.service $spec.service.enabled }}
+          ports:
+            {{- if $spec.service.ports }}
+            {{- range $spec.service.ports }}
+            - name: {{ .name | default "http" }}
+              containerPort: {{ .targetPort | default .port }}
+              protocol: TCP
+            {{- end }}
+            {{- else }}
+            - name: {{ $spec.service.portName | default "http" }}
+              containerPort: {{ $spec.service.port | default 80 }}
+              protocol: TCP
+            {{- end }}
+          {{- end }}
+          {{- with $spec.livenessProbe }}
+          livenessProbe:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with $spec.readinessProbe }}
+          readinessProbe:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with $spec.startupProbe }}
+          startupProbe:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with $spec.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with $spec.volumeMounts }}
+          volumeMounts:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+      {{- with $spec.volumes }}
+      volumes:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $spec.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $spec.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $spec.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}
+{{- end }}

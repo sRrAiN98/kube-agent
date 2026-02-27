@@ -1,0 +1,35 @@
+{{- range $name, $spec := .Values.specs }}
+{{- if ne $spec.enabled false }}
+---
+{{- if and $spec.persistence $spec.persistence.enabled }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ $spec.persistence.name | default (printf "%s-pvc" (include "blueprint.fullname" (dict "root" $ "name" $name "spec" $spec))) }}
+  labels:
+    {{- include "blueprint.labels" (dict "root" $ "name" $name "spec" $spec) | nindent 4 }}
+  annotations:
+    helm.sh/resource-policy: keep
+    {{- with $spec.persistence.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  accessModes:
+    - {{ $spec.persistence.accessMode | default "ReadWriteOnce" }}
+  resources:
+    requests:
+      storage: {{ $spec.persistence.size }}
+  {{- $storageClass := "" }}
+  {{- if $.Values.global.storageClass }}
+    {{- $storageClass = $.Values.global.storageClass }}
+  {{- else if $.Values.global.defaultStorageClass }}
+    {{- $storageClass = $.Values.global.defaultStorageClass }}
+  {{- else if $spec.persistence.storageClassName }}
+    {{- $storageClass = $spec.persistence.storageClassName }}
+  {{- end }}
+  {{- if $storageClass }}
+  storageClassName: {{ $storageClass }}
+  {{- end }}
+{{- end }}
+{{- end }}
+{{- end }}

@@ -1,0 +1,35 @@
+{{- /* TriggerAuthentication - 필요한 경우에만 생성 */ -}}
+{{- range $name, $spec := .Values.specs }}
+{{- if ne $spec.enabled false }}
+{{- if and $spec.keda $spec.keda.enabled $spec.keda.triggerAuthentication }}
+---
+apiVersion: keda.sh/v1alpha1
+kind: TriggerAuthentication
+metadata:
+  name: {{ $name }}-trigger-auth
+  labels:
+    {{- include "blueprint.labels" (dict "root" $ "name" $name "spec" $spec) | nindent 4 }}
+spec:
+  {{- if $spec.keda.triggerAuthentication.secretTargetRef }}
+  secretTargetRef:
+    {{- range $spec.keda.triggerAuthentication.secretTargetRef }}
+    - parameter: {{ .parameter }}
+      name: {{ .name }}
+      key: {{ .key }}
+    {{- end }}
+  {{- end }}
+  {{- if $spec.keda.triggerAuthentication.podIdentity }}
+  podIdentity:
+    {{- toYaml $spec.keda.triggerAuthentication.podIdentity | nindent 4 }}
+  {{- end }}
+  {{- if $spec.keda.triggerAuthentication.env }}
+  env:
+    {{- range $spec.keda.triggerAuthentication.env }}
+    - parameter: {{ .parameter }}
+      name: {{ .name }}
+      containerName: {{ .containerName | default $name }}
+    {{- end }}
+  {{- end }}
+{{- end }}
+{{- end }}
+{{- end }}

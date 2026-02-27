@@ -1,0 +1,25 @@
+{{- range $name, $spec := .Values.specs }}
+{{- if ne $spec.enabled false }}
+---
+{{- if and $spec.service $spec.service.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "blueprint.fullname" (dict "root" $ "name" $name "spec" $spec) }}
+  labels:
+    {{- include "blueprint.labels" (dict "root" $ "name" $name "spec" $spec) | nindent 4 }}
+spec:
+  type: {{ $spec.service.type | default "ClusterIP" }}
+  ports:
+    - name: {{ $spec.service.portName | default "http" }}
+      port: {{ $spec.service.port }}
+      targetPort: {{ $spec.service.port }}
+      protocol: TCP
+      {{- if eq $spec.service.type "NodePort" }}
+      nodePort: {{ $spec.service.nodePort | default "null" }}
+      {{- end }}
+  selector:
+    {{- include "blueprint.selectorLabels" (dict "root" $ "name" $name "spec" $spec) | nindent 4 }}
+{{- end }}
+{{- end }}
+{{- end }}

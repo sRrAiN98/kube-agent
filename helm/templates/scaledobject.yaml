@@ -1,0 +1,40 @@
+{{- range $name, $spec := .Values.specs }}
+{{- if ne $spec.enabled false }}
+{{- if and $spec.keda $spec.keda.enabled }}
+---
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: {{ include "blueprint.fullname" (dict "root" $ "name" $name "spec" $spec) }}-scaledobject
+  labels:
+    {{- include "blueprint.labels" (dict "root" $ "name" $name "spec" $spec) | nindent 4 }}
+spec:
+  scaleTargetRef:
+    name: {{ include "blueprint.fullname" (dict "root" $ "name" $name "spec" $spec) }}
+  minReplicaCount: {{ $spec.keda.minReplicas | default 1 }}
+  maxReplicaCount: {{ $spec.keda.maxReplicas | default 10 }}
+  {{- with $spec.keda.pollingInterval }}
+  pollingInterval: {{ . }}
+  {{- end }}
+  {{- with $spec.keda.cooldownPeriod }}
+  cooldownPeriod: {{ . }}
+  {{- end }}
+  {{- if $spec.keda.advanced }}
+  advanced:
+    {{- toYaml $spec.keda.advanced | nindent 4 }}
+  {{- end }}
+  triggers:
+  {{- range $spec.keda.triggers }}
+  - type: {{ .type }}
+    metadata:
+      {{- range $key, $value := .metadata }}
+      {{ $key }}: {{ $value | quote }}
+      {{- end }}
+    {{- if .authenticationRef }}
+    authenticationRef:
+      name: {{ .authenticationRef.name }}
+    {{- end }}
+  {{- end }}
+{{- end }}
+{{- end }}
+{{- end }}

@@ -1,0 +1,21 @@
+{{- range $name, $spec := .Values.specs }}
+{{- if ne $spec.enabled false }}
+---
+{{- if and $spec.clusterRole $spec.clusterRole.enabled }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "blueprint.fullname" (dict "root" $ "name" $name "spec" $spec) }}
+  labels:
+    {{- include "blueprint.labels" (dict "root" $ "name" $name "spec" $spec) | nindent 4 }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "blueprint.serviceAccountName" (dict "root" $ "name" $name "spec" $spec) }}
+    namespace: {{ $.Release.Namespace }}
+roleRef:
+  kind: ClusterRole
+  name: {{ include "blueprint.fullname" (dict "root" $ "name" $name "spec" $spec) }}
+  apiGroup: rbac.authorization.k8s.io
+{{- end }}
+{{- end }}
+{{- end }}

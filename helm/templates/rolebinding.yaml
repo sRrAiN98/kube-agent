@@ -1,0 +1,22 @@
+{{- range $name, $spec := .Values.specs }}
+{{- if ne $spec.enabled false }}
+---
+{{- if and $spec.role $spec.role.enabled }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "blueprint.fullname" (dict "root" $ "name" $name "spec" $spec) }}
+  namespace: {{ $.Release.Namespace }}
+  labels:
+    {{- include "blueprint.labels" (dict "root" $ "name" $name "spec" $spec) | nindent 4 }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "blueprint.serviceAccountName" (dict "root" $ "name" $name "spec" $spec) }}
+    namespace: {{ $.Release.Namespace }}
+roleRef:
+  kind: Role
+  name: {{ include "blueprint.fullname" (dict "root" $ "name" $name "spec" $spec) }}
+  apiGroup: rbac.authorization.k8s.io
+{{- end }}
+{{- end }}
+{{- end }}

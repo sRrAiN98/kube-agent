@@ -1,0 +1,16 @@
+{{- range $name, $spec := .Values.specs }}
+{{- if ne $spec.enabled false }}
+---
+{{- if and $spec.role $spec.role.enabled }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "blueprint.fullname" (dict "root" $ "name" $name "spec" $spec) }}
+  namespace: {{ $.Release.Namespace }}
+  labels:
+    {{- include "blueprint.labels" (dict "root" $ "name" $name "spec" $spec) | nindent 4 }}
+rules:
+  {{- toYaml $spec.role.rules | nindent 2 }}
+{{- end }}
+{{- end }}
+{{- end }}

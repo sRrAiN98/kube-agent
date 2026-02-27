@@ -1,0 +1,35 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "kube-agent"
+version = "0.1.0"
+description = "CLI-based AI agent for Kubernetes and Gitea management in offline environments"
+requires-python = ">=3.11"
+license = "Apache-2.0"
+dependencies = [
+    "openai>=1.40.0",
+    "kubernetes>=31.0.0",
+    "httpx>=0.27.0",
+    "rich>=13.9.0",
+    "prompt-toolkit>=3.0.48",
+    "pyyaml>=6.0.2",
+    "click>=8.1.7",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "ruff>=0.8.0",
+]
+
+[project.scripts]
+kube-agent = "kube_agent.main:main"
+
+[tool.ruff]
+target-version = "py311"
+line-length = 120
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "W", "UP"]

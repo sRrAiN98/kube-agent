@@ -1,0 +1,16 @@
+{{- range $name, $spec := .Values.specs }}
+{{- if ne $spec.enabled false }}
+---
+{{- if and $spec.podDisruptionBudget $spec.podDisruptionBudget.enabled }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "blueprint.fullname" (dict "root" $ "name" $name "spec" $spec) }}
+spec:
+  minAvailable: {{ $spec.podDisruptionBudget.minAvailable | default 1 }}  
+  selector:
+    matchLabels:
+      {{- include "blueprint.selectorLabels" (dict "root" $ "name" $name "spec" $spec) | nindent 6 }}
+{{- end }}
+{{- end }}
+{{- end }}

@@ -1,0 +1,124 @@
+########################################################
+# Global
+########################################################
+global:
+  imageRegistry: ""
+  imagePullSecrets: []
+
+########################################################
+# kube-agent: CLI AI Agent for K8s + Gitea management
+########################################################
+specs:
+  kube-agent:
+    enabled: true
+
+    image:
+      repository: docker.io/srrain98/kube-agent
+      tag: "0.1.0"
+      pullPolicy: IfNotPresent
+
+    replicaCount: 1
+
+    # Interactive CLI agent - keep running with sleep
+    command: ["kube-agent"]
+    args: []
+
+    env:
+      # LLM 설정
+      - name: KUBE_AGENT_LLM_URL
+        value: "http://litellm.litellm.svc.cluster.local:4000/v1"
+      - name: KUBE_AGENT_LLM_MODEL
+        value: "gpt-4o"
+      - name: KUBE_AGENT_LLM_API_KEY
+        valueFrom:
+          secretKeyRef:
+            name: kube-agent-secrets
+            key: llm-api-key
+            optional: true
+      # Gitea 설정
+      - name: KUBE_AGENT_GITEA_URL
+        value: "http://gitea.ops.svc.cluster.local:3000"
+      - name: KUBE_AGENT_GITEA_TOKEN
+        valueFrom:
+          secretKeyRef:
+            name: kube-agent-secrets
+            key: gitea-token
+            optional: true
+      - name: KUBE_AGENT_GITEA_TIMEOUT
+        value: "30"
+      # Kubernetes 설정
+      - name: KUBE_AGENT_NAMESPACE
+        valueFrom:
+          fieldRef:
+            fieldPath: metadata.namespace
+      # 에이전트 루프 설정
+      - name: KUBE_AGENT_MAX_MESSAGES
+        value: "80"
+      - name: KUBE_AGENT_MAX_TOOL_ITERATIONS
+        value: "30"
+      - name: KUBE_AGENT_MAX_AUTO_CONTINUE
+        value: "5"
+      - name: KUBE_AGENT_TOOL_RESULT_MAX_CHARS
+        value: "3000"
+
+    resources:
+      requests:
+        cpu: 100m
+        memory: 256Mi
+      limits:
+        cpu: 500m
+        memory: 512Mi
+
+    # Service Account for K8s API access
+    serviceAccount:
+      create: true
+      automount: true
+      name: ""
+
+    # Namespace-scoped Role for K8s resource management
+    role:
+      enabled: true
+      rules:
+        # Pod management
+        - apiGroups: [""]
+          resources: ["pods", "pods/log", "pods/status"]
+          verbs: ["get", "list", "watch"]
+        # Deployment management (read + restart + scale)
+        - apiGroups: ["apps"]
+          resources: ["deployments", "statefulsets", "replicasets"]
+          verbs: ["get", "list", "watch", "update", "patch"]
+        - apiGroups: ["apps"]
+          resources: ["deployments/scale"]
+          verbs: ["update", "patch"]
+        # Service, ConfigMap, Secret (read)
+        - apiGroups: [""]
+          resources: ["services", "configmaps"]
+          verbs: ["get", "list", "watch"]
+        - apiGroups: [""]
+          resources: ["secrets"]
+          verbs: ["list"]
+        # Events (read)
+        - apiGroups: [""]
+          resources: ["events"]
+          verbs: ["get", "list", "watch"]
+
+    # No ingress/service needed - this is a CLI tool
+    service:
+      enabled: false
+
+    securityContext:
+      runAsUser: 1000
+      runAsGroup: 1000
+      runAsNonRoot: true
+      readOnlyRootFilesystem: false
+      allowPrivilegeEscalation: false
+
+    # Auto-generate secrets (change these values to your actual credentials)
+    # extraResources:
+    #   - apiVersion: v1
+    #     kind: Secret
+    #     metadata:
+    #       name: kube-agent-secrets
+    #     stringData:
+    #       llm-api-key: "sk-test-litellm-qwer1234"  # LiteLLM API key
+    #       gitea-token: "REPLACE_WITH_GITEA_TOKEN"   # Gitea personal access token

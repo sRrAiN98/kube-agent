@@ -1,0 +1,15 @@
+{{- range $name, $spec := .Values.specs }}
+{{- if ne $spec.enabled false }}
+---
+{{- if and $spec.clusterRole $spec.clusterRole.enabled }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "blueprint.fullname" (dict "root" $ "name" $name "spec" $spec) }}
+  labels:
+    {{- include "blueprint.labels" (dict "root" $ "name" $name "spec" $spec) | nindent 4 }}
+rules:
+  {{- toYaml $spec.clusterRole.rules | nindent 2 }}
+{{- end }}
+{{- end }}
+{{- end }}

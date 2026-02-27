@@ -1,0 +1,8 @@
+{{- range $spec := .Values.specs }}
+{{- if and $spec.enabled $spec.extraResources }}
+{{- range $spec.extraResources }}
+---
+{{ toYaml . | nindent 0 }}
+{{- end }}
+{{- end }}
+{{- end }}

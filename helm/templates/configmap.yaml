@@ -1,0 +1,18 @@
+{{- range $name, $spec := .Values.specs }}
+{{- if ne $spec.enabled false }}
+---
+{{- if and $spec.configMap $spec.configMap.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $spec.configMap.name | default (printf "%s-config" (include "blueprint.fullname" (dict "root" $ "name" $name "spec" $spec))) }}
+  labels:
+    {{- include "blueprint.labels" (dict "root" $ "name" $name "spec" $spec) | nindent 4 }}
+data:
+  {{- range $key, $value := $spec.configMap.data }}
+  {{ $key }}: |-
+    {{- $value | nindent 4 }}
+  {{- end }}
+{{- end }}
+{{- end }}
+{{- end }}
