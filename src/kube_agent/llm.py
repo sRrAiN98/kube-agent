@@ -103,6 +103,14 @@ class LLMClient:
             response = await self._client.chat.completions.create(**kwargs)
             message = response.choices[0].message
 
+            if self._verbose and response.usage:
+                logger.debug(
+                    "Token usage: prompt=%d, completion=%d, total=%d",
+                    response.usage.prompt_tokens,
+                    response.usage.completion_tokens,
+                    response.usage.total_tokens,
+                )
+
             # 응답을 직렬화 가능한 딕셔너리로 변환
             result: dict[str, Any] = {
                 "role": "assistant",

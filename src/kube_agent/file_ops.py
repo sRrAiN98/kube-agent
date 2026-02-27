@@ -152,8 +152,9 @@ class FileOps:
         if error:
             return error
 
-        if len(content.encode("utf-8")) > _MAX_WRITE_SIZE:
-            return f"쓰기 내용이 너무 큽니다: {len(content.encode('utf-8')):,} bytes (최대 {_MAX_WRITE_SIZE:,} bytes)"
+        encoded_size = len(content.encode("utf-8"))
+        if encoded_size > _MAX_WRITE_SIZE:
+            return f"쓰기 내용이 너무 큽니다: {encoded_size:,} bytes (최대 {_MAX_WRITE_SIZE:,} bytes)"
 
         target = Path(path)
 

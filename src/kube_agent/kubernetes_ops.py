@@ -58,27 +58,32 @@ class KubernetesOps:
 
         클러스터 내부 환경(in-cluster)을 먼저 시도하고,
         실패하면 로컬 kubeconfig를 사용합니다.
+        명시적 ApiClient를 생성하여 글로벌 설정 오염을 최소화합니다.
 
         Args:
             namespace: 기본 작업 네임스페이스
             context: kubeconfig 컨텍스트 (빈 문자열이면 현재 컨텍스트 사용)
         """
         self.namespace = namespace
+        api_client: client.ApiClient
+
         try:
-            config.load_incluster_config()
+            # In-cluster: 명시적 Configuration 객체에 로드하여 글로벌 상태 격리
+            incluster_cfg = client.Configuration()
+            config.load_incluster_config(client_configuration=incluster_cfg)
+            api_client = client.ApiClient(configuration=incluster_cfg)
             logger.info("In-cluster Kubernetes 설정 로드 완료")
         except config.ConfigException:
             try:
-                if context:
-                    config.load_kube_config(context=context)
-                else:
-                    config.load_kube_config()
+                # Kubeconfig: new_client_from_config는 글로벌 상태를 변경하지 않음
+                api_client = config.new_client_from_config(context=context or None)
                 logger.info("Kubeconfig 설정 로드 완료")
             except config.ConfigException as exc:
                 logger.warning("Kubernetes 설정 로드 실패: %s", exc)
+                api_client = client.ApiClient()
 
-        self._core = client.CoreV1Api()
-        self._apps = client.AppsV1Api()
+        self._core = client.CoreV1Api(api_client=api_client)
+        self._apps = client.AppsV1Api(api_client=api_client)
 
     def list_pods(self) -> str:
         """네임스페이스 내 모든 Pod를 목록으로 반환합니다.

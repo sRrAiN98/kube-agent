@@ -79,11 +79,11 @@ class AgentConfig:
             tool_result_max_chars=int(os.environ.get("KUBE_AGENT_TOOL_RESULT_MAX_CHARS", "0")),
         )
 
-    def merge(self, **overrides: str | bool) -> AgentConfig:
-        """CLI 인자 등 외부 값으로 빈 필드를 오버라이드합니다.
+    def merge(self, **overrides: str | bool | int | float) -> AgentConfig:
+        """CLI 인자 등 외부 값으로 필드를 오버라이드합니다.
 
-        이미 값이 설정된 필드는 덮어쓰지 않습니다 (CLI > env > default 순서).
-        빈 문자열이 아닌 값만 오버라이드합니다.
+        CLI에서 제공된 값(truthy)은 기존 설정(env 포함)을 무조건 덮어씁니다.
+        설정 우선순위: CLI 인자 > 환경 변수 > 기본값
 
         Args:
             **overrides: 오버라이드할 필드 키-값 쌍
@@ -91,9 +91,10 @@ class AgentConfig:
         Returns:
             오버라이드가 적용된 새 AgentConfig 인스턴스
         """
-        updates: dict[str, str | bool] = {}
+        updates: dict[str, str | bool | int | float] = {}
         for key, value in overrides.items():
-            if value and not getattr(self, key, None):
+            # CLI에서 제공된 값이 있으면(truthy) 기존 값과 관계없이 항상 덮어씀
+            if value:
                 updates[key] = value
         if updates:
             current = self.__dict__.copy()

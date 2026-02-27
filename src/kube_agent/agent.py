@@ -9,7 +9,6 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import re
 from typing import Any
 
 from prompt_toolkit import PromptSession
@@ -24,15 +23,6 @@ from kube_agent.llm import SYSTEM_PROMPT, LLMClient
 from kube_agent.tools import TOOLS, execute_tool
 
 logger = logging.getLogger(__name__)
-
-
-# 작업 완료를 나타내는 키워드 패턴
-_COMPLETION_PATTERNS = re.compile(
-    r"(완료|마무리|완료되었|완료했|완료합니다|끝났|끝났습니다|"
-    r"요약하면|요약하자면|요약해서|정리하면|정리하자면|"
-    r"all done|completed|finished|summary|in summary|to summarize)",
-    re.IGNORECASE,
-)
 
 
 class Agent:
@@ -142,33 +132,19 @@ class Agent:
 
     @staticmethod
     def _needs_continuation(response: dict[str, Any]) -> bool:
-        """응답이 중간 상태이고 계속 진행이 필요한지 판단합니다.
+        """텍스트 응답(tool_calls 없음)이 왔을 때 계속 진행이 필요한지 판단합니다.
 
-        LLM이 tool_calls 없이 텍스트로만 응답한 경우,
-        작업이 아직 끝나지 않았는지 판단합니다.
+        시스템 프롬프트가 "작업 완료 전까지 텍스트 응답 금지"를 지시하므로,
+        tool_calls 없이 텍스트가 반환된 경우 작업이 완료된 것으로 간주합니다.
+        키워드 휴리스틱은 오탐(false-positive)을 유발하므로 사용하지 않습니다.
 
         Args:
             response: LLM 응답 딕셔너리
 
         Returns:
-            True면 자동 계속 진행, False면 종료
+            항상 False (텍스트 응답 = 작업 완료)
         """
-        # tool_calls가 있으면 이미 _process_tool_calls에서 처리됨
-        if "tool_calls" in response:
-            return False
-
-        content = response.get("content", "")
-        if not content:
-            return False
-
-        # 응답이 짧으면 중간 상태일 가능성 높음 (예: "로그를 확인하겠습니다")
-        # 응답이 길고 완료 키워드가 있으면 작업 완료
-        if len(content) > 200 and _COMPLETION_PATTERNS.search(content):
-            return False
-
-        # 짧은 중간 응답 (예: "문제를 발견했습니다. 수정하겠습니다.")
-        # 또는 완료 키워드 없는 긴 응답 → 계속 진행
-        return True
+        return False
 
     async def _handle_user_input(self, user_input: str) -> None:
         """사용자 입력을 처리하고 자율 실행 모드로 LLM 응답을 처리합니다.
@@ -243,37 +219,40 @@ class Agent:
         # prompt_toolkit 세션 설정
         session: PromptSession[str] = PromptSession(history=InMemoryHistory())
 
-        while True:
-            try:
-                # prompt_toolkit은 동기 함수이므로 executor에서 실행
-                user_input = await asyncio.get_event_loop().run_in_executor(
-                    None,
-                    lambda: session.prompt("You: "),
-                )
+        try:
+            while True:
+                try:
+                    # prompt_toolkit은 동기 함수이므로 executor에서 실행
+                    user_input = await asyncio.get_running_loop().run_in_executor(
+                        None,
+                        lambda: session.prompt("You: "),
+                    )
 
-                # 빈 입력 무시
-                stripped = user_input.strip()
-                if not stripped:
+                    # 빈 입력 무시
+                    stripped = user_input.strip()
+                    if not stripped:
+                        continue
+
+                    # 종료 명령어
+                    if stripped.lower() in ("exit", "quit", "bye"):
+                        cli.print_goodbye()
+                        break
+
+                    await self._handle_user_input(stripped)
+
+                except KeyboardInterrupt:
+                    # Ctrl+C: 현재 요청 취소
+                    cli.print_info("\n(cancelled)")
                     continue
 
-                # 종료 명령어
-                if stripped.lower() in ("exit", "quit", "bye"):
+                except EOFError:
+                    # Ctrl+D: 종료
                     cli.print_goodbye()
                     break
 
-                await self._handle_user_input(stripped)
-
-            except KeyboardInterrupt:
-                # Ctrl+C: 현재 요청 취소
-                cli.print_info("\n(cancelled)")
-                continue
-
-            except EOFError:
-                # Ctrl+D: 종료
-                cli.print_goodbye()
-                break
-
-            except Exception as exc:
-                cli.print_error(f"예기치 않은 오류: {exc}")
-                logger.exception("Agent loop 예외")
-                continue
+                except Exception as exc:
+                    cli.print_error(f"예기치 않은 오류: {exc}")
+                    logger.exception("Agent loop 예외")
+                    continue
+        finally:
+            await self._gitea.close()

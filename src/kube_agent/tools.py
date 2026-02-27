@@ -6,15 +6,28 @@ OpenAI 형식의 도구(tool) 정의와 실행 디스패처를 제공합니다.
 
 from __future__ import annotations
 
-import json
+import asyncio
 import logging
-from typing import Any
+from typing import Any, Callable
 
 from kube_agent.file_ops import FileOps
 from kube_agent.gitea_ops import GiteaOps
 from kube_agent.kubernetes_ops import KubernetesOps
 
 logger = logging.getLogger(__name__)
+
+# 도구 이름 → 핸들러 함수 레지스트리
+# 핸들러 시그니처: (arguments, k8s, gitea, files) -> str | Coroutine[str]
+# 동기 반환(k8s, files)과 코루틴 반환(gitea)을 execute_tool에서 통합 처리합니다.
+_TOOL_REGISTRY: dict[str, Callable[..., Any]] = {}
+
+
+def _register(name: str) -> Callable:
+    """도구 핸들러를 레지스트리에 등록하는 데코레이터."""
+    def decorator(fn: Callable) -> Callable:
+        _TOOL_REGISTRY[name] = fn
+        return fn
+    return decorator
 
 
 # OpenAI function calling 형식의 도구 정의 목록
@@ -518,6 +531,123 @@ TOOLS: list[dict[str, Any]] = [
 ]
 
 
+# ---- Kubernetes 도구 핸들러 ----
+
+@_register("k8s_list_pods")
+def _k8s_list_pods(a: dict, k8s: KubernetesOps, **_: Any) -> str:
+    return k8s.list_pods()
+
+@_register("k8s_get_pod")
+def _k8s_get_pod(a: dict, k8s: KubernetesOps, **_: Any) -> str:
+    return k8s.get_pod(name=a["name"])
+
+@_register("k8s_get_pod_logs")
+def _k8s_get_pod_logs(a: dict, k8s: KubernetesOps, **_: Any) -> str:
+    return k8s.get_pod_logs(name=a["name"], container=a.get("container"), tail=a.get("tail", 100))
+
+@_register("k8s_list_deployments")
+def _k8s_list_deployments(a: dict, k8s: KubernetesOps, **_: Any) -> str:
+    return k8s.list_deployments()
+
+@_register("k8s_get_deployment")
+def _k8s_get_deployment(a: dict, k8s: KubernetesOps, **_: Any) -> str:
+    return k8s.get_deployment(name=a["name"])
+
+@_register("k8s_restart_deployment")
+def _k8s_restart_deployment(a: dict, k8s: KubernetesOps, **_: Any) -> str:
+    return k8s.restart_deployment(name=a["name"])
+
+@_register("k8s_scale_deployment")
+def _k8s_scale_deployment(a: dict, k8s: KubernetesOps, **_: Any) -> str:
+    return k8s.scale_deployment(name=a["name"], replicas=a["replicas"])
+
+@_register("k8s_list_services")
+def _k8s_list_services(a: dict, k8s: KubernetesOps, **_: Any) -> str:
+    return k8s.list_services()
+
+@_register("k8s_list_configmaps")
+def _k8s_list_configmaps(a: dict, k8s: KubernetesOps, **_: Any) -> str:
+    return k8s.list_configmaps()
+
+@_register("k8s_get_configmap")
+def _k8s_get_configmap(a: dict, k8s: KubernetesOps, **_: Any) -> str:
+    return k8s.get_configmap(name=a["name"])
+
+@_register("k8s_list_secrets")
+def _k8s_list_secrets(a: dict, k8s: KubernetesOps, **_: Any) -> str:
+    return k8s.list_secrets()
+
+@_register("k8s_get_events")
+def _k8s_get_events(a: dict, k8s: KubernetesOps, **_: Any) -> str:
+    return k8s.get_events(limit=a.get("limit", 20))
+
+
+# ---- Gitea 도구 핸들러 ----
+
+@_register("gitea_list_repos")
+async def _gitea_list_repos(a: dict, gitea: GiteaOps, **_: Any) -> str:
+    return await gitea.list_repos()
+
+@_register("gitea_get_repo")
+async def _gitea_get_repo(a: dict, gitea: GiteaOps, **_: Any) -> str:
+    return await gitea.get_repo(owner=a["owner"], name=a["name"])
+
+@_register("gitea_create_repo")
+async def _gitea_create_repo(a: dict, gitea: GiteaOps, **_: Any) -> str:
+    return await gitea.create_repo(name=a["name"], description=a.get("description", ""), private=a.get("private", True))
+
+@_register("gitea_delete_repo")
+async def _gitea_delete_repo(a: dict, gitea: GiteaOps, **_: Any) -> str:
+    return await gitea.delete_repo(owner=a["owner"], name=a["name"])
+
+@_register("gitea_list_branches")
+async def _gitea_list_branches(a: dict, gitea: GiteaOps, **_: Any) -> str:
+    return await gitea.list_branches(owner=a["owner"], repo=a["repo"])
+
+@_register("gitea_list_users")
+async def _gitea_list_users(a: dict, gitea: GiteaOps, **_: Any) -> str:
+    return await gitea.list_users()
+
+@_register("gitea_create_webhook")
+async def _gitea_create_webhook(a: dict, gitea: GiteaOps, **_: Any) -> str:
+    return await gitea.create_webhook(owner=a["owner"], repo=a["repo"], target_url=a["target_url"], events=a.get("events"))
+
+@_register("gitea_list_webhooks")
+async def _gitea_list_webhooks(a: dict, gitea: GiteaOps, **_: Any) -> str:
+    return await gitea.list_webhooks(owner=a["owner"], repo=a["repo"])
+
+@_register("gitea_clone_repo")
+async def _gitea_clone_repo(a: dict, gitea: GiteaOps, **_: Any) -> str:
+    return await gitea.git_clone(repo_url=a["repo_url"], path=a["path"])
+
+@_register("gitea_git_pull")
+async def _gitea_git_pull(a: dict, gitea: GiteaOps, **_: Any) -> str:
+    return await gitea.git_pull(path=a["path"])
+
+@_register("gitea_git_status")
+async def _gitea_git_status(a: dict, gitea: GiteaOps, **_: Any) -> str:
+    return await gitea.git_status(path=a["path"])
+
+@_register("gitea_commit_and_push")
+async def _gitea_commit_and_push(a: dict, gitea: GiteaOps, **_: Any) -> str:
+    return await gitea.git_commit_and_push(path=a["path"], message=a["message"])
+
+
+# ---- 파일시스템 도구 핸들러 ----
+
+@_register("file_list")
+def _file_list(a: dict, files: FileOps, **_: Any) -> str:
+    return files.list_directory(path=a["path"], recursive=a.get("recursive", False))
+
+@_register("file_read")
+def _file_read(a: dict, files: FileOps, **_: Any) -> str:
+    return files.read_file(path=a["path"])
+
+@_register("file_write")
+def _file_write(a: dict, files: FileOps, **_: Any) -> str:
+    return files.write_file(path=a["path"], content=a["content"], create_dirs=a.get("create_dirs", False))
+
+
 async def execute_tool(
     tool_name: str,
     arguments: dict[str, Any],
@@ -525,7 +655,9 @@ async def execute_tool(
     gitea: GiteaOps,
     files: FileOps,
 ) -> str:
-    """도구 이름에 따라 적절한 메서드를 실행합니다.
+    """도구 이름에 따라 레지스트리에서 핸들러를 찾아 실행합니다.
+
+    동기 핸들러(k8s, files)와 비동기 핸들러(gitea)를 통합 처리합니다.
 
     Args:
         tool_name: 실행할 도구 이름 (예: k8s_list_pods, gitea_list_repos, file_read)
@@ -537,90 +669,17 @@ async def execute_tool(
     Returns:
         도구 실행 결과 문자열
     """
+    handler = _TOOL_REGISTRY.get(tool_name)
+    if handler is None:
+        return f"알 수 없는 도구: {tool_name}"
+
     try:
-        # Kubernetes 도구 디스패치
-        if tool_name == "k8s_list_pods":
-            return k8s.list_pods()
-        elif tool_name == "k8s_get_pod":
-            return k8s.get_pod(name=arguments["name"])
-        elif tool_name == "k8s_get_pod_logs":
-            return k8s.get_pod_logs(
-                name=arguments["name"],
-                container=arguments.get("container"),
-                tail=arguments.get("tail", 100),
-            )
-        elif tool_name == "k8s_list_deployments":
-            return k8s.list_deployments()
-        elif tool_name == "k8s_get_deployment":
-            return k8s.get_deployment(name=arguments["name"])
-        elif tool_name == "k8s_restart_deployment":
-            return k8s.restart_deployment(name=arguments["name"])
-        elif tool_name == "k8s_scale_deployment":
-            return k8s.scale_deployment(name=arguments["name"], replicas=arguments["replicas"])
-        elif tool_name == "k8s_list_services":
-            return k8s.list_services()
-        elif tool_name == "k8s_list_configmaps":
-            return k8s.list_configmaps()
-        elif tool_name == "k8s_get_configmap":
-            return k8s.get_configmap(name=arguments["name"])
-        elif tool_name == "k8s_list_secrets":
-            return k8s.list_secrets()
-        elif tool_name == "k8s_get_events":
-            return k8s.get_events(limit=arguments.get("limit", 20))
-
-        # Gitea 도구 디스패치
-        elif tool_name == "gitea_list_repos":
-            return await gitea.list_repos()
-        elif tool_name == "gitea_get_repo":
-            return await gitea.get_repo(owner=arguments["owner"], name=arguments["name"])
-        elif tool_name == "gitea_create_repo":
-            return await gitea.create_repo(
-                name=arguments["name"],
-                description=arguments.get("description", ""),
-                private=arguments.get("private", True),
-            )
-        elif tool_name == "gitea_delete_repo":
-            return await gitea.delete_repo(owner=arguments["owner"], name=arguments["name"])
-        elif tool_name == "gitea_list_branches":
-            return await gitea.list_branches(owner=arguments["owner"], repo=arguments["repo"])
-        elif tool_name == "gitea_list_users":
-            return await gitea.list_users()
-        elif tool_name == "gitea_create_webhook":
-            return await gitea.create_webhook(
-                owner=arguments["owner"],
-                repo=arguments["repo"],
-                target_url=arguments["target_url"],
-                events=arguments.get("events"),
-            )
-        elif tool_name == "gitea_list_webhooks":
-            return await gitea.list_webhooks(owner=arguments["owner"], repo=arguments["repo"])
-        elif tool_name == "gitea_clone_repo":
-            return await gitea.git_clone(repo_url=arguments["repo_url"], path=arguments["path"])
-        elif tool_name == "gitea_git_pull":
-            return await gitea.git_pull(path=arguments["path"])
-        elif tool_name == "gitea_git_status":
-            return await gitea.git_status(path=arguments["path"])
-        elif tool_name == "gitea_commit_and_push":
-            return await gitea.git_commit_and_push(path=arguments["path"], message=arguments["message"])
-
-        # 파일시스템 도구 디스패치
-        elif tool_name == "file_list":
-            return files.list_directory(path=arguments["path"], recursive=arguments.get("recursive", False))
-        elif tool_name == "file_read":
-            return files.read_file(path=arguments["path"])
-        elif tool_name == "file_write":
-            return files.write_file(
-                path=arguments["path"],
-                content=arguments["content"],
-                create_dirs=arguments.get("create_dirs", False),
-            )
-        else:
-            return f"알 수 없는 도구: {tool_name}"
-
+        result = handler(arguments, k8s=k8s, gitea=gitea, files=files)
+        if asyncio.iscoroutine(result):
+            return await result
+        return result
     except KeyError as exc:
         return f"도구 '{tool_name}' 실행 시 필수 인자 누락: {exc}"
-    except json.JSONDecodeError as exc:
-        return f"도구 '{tool_name}' 인자 파싱 오류: {exc}"
     except Exception as exc:
         logger.error("도구 '%s' 실행 중 예외: %s", tool_name, exc)
         return f"도구 '{tool_name}' 실행 중 오류: {exc}"

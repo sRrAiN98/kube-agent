@@ -7,11 +7,15 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from pathlib import Path
 from typing import Any
 
 import httpx
 
 logger = logging.getLogger(__name__)
+
+# Git 작업에 허용된 sandbox 디렉토리 (file_ops.py와 동일)
+_GIT_SANDBOX_DIRS = ("/tmp", "/home/agent")
 
 
 class GiteaOps:
@@ -19,6 +23,9 @@ class GiteaOps:
 
     Gitea REST API (httpx 비동기)와 Git CLI (subprocess)를
     통해 저장소, 브랜치, 웹훅 등을 관리합니다.
+
+    httpx.AsyncClient를 클래스 레벨에서 관리하여 커넥션 풀을 재사용합니다.
+    사용 후 close()를 반드시 호출하세요.
     """
 
     def __init__(self, gitea_url: str, token: str, timeout: float = 30.0) -> None:
@@ -31,10 +38,14 @@ class GiteaOps:
         """
         self._base_url = gitea_url.rstrip("/")
         self._token = token
-        self._timeout = timeout
         self._api_url = f"{self._base_url}/api/v1"
+        # 커넥션 풀 재사용을 위해 클라이언트를 클래스 레벨에서 관리
+        self._client = httpx.AsyncClient(
+            timeout=timeout,
+            headers=self._build_headers(),
+        )
 
-    def _headers(self) -> dict[str, str]:
+    def _build_headers(self) -> dict[str, str]:
         """API 요청에 사용할 인증 헤더를 반환합니다."""
         headers: dict[str, str] = {"Content-Type": "application/json"}
         if self._token:
@@ -44,6 +55,30 @@ class GiteaOps:
     def _enabled(self) -> bool:
         """Gitea 연결이 설정되어 있는지 확인합니다."""
         return bool(self._base_url)
+
+    async def close(self) -> None:
+        """httpx 클라이언트를 닫고 커넥션 풀을 해제합니다."""
+        await self._client.aclose()
+
+    def _validate_git_path(self, path: str) -> str | None:
+        """Git 작업 경로가 sandbox 내에 있는지 검증합니다.
+
+        Args:
+            path: 검증할 디렉토리 경로
+
+        Returns:
+            검증 통과 시 None, 실패 시 오류 메시지 문자열
+        """
+        try:
+            resolved = str(Path(path).resolve())
+        except (OSError, ValueError) as exc:
+            return f"경로를 확인할 수 없습니다: {exc}"
+
+        for sandbox in _GIT_SANDBOX_DIRS:
+            if resolved.startswith(sandbox):
+                return None
+
+        return f"보안 제한: '{path}'에 접근할 수 없습니다. 허용된 디렉토리: {', '.join(_GIT_SANDBOX_DIRS)}"
 
     # ---- REST API 메서드 (httpx 비동기) ----
 
@@ -57,14 +92,12 @@ class GiteaOps:
             return "Gitea URL이 설정되지 않았습니다."
 
         try:
-            async with httpx.AsyncClient(timeout=self._timeout) as client:
-                resp = await client.get(
-                    f"{self._api_url}/repos/search",
-                    headers=self._headers(),
-                    params={"limit": 50},
-                )
-                resp.raise_for_status()
-                data = resp.json()
+            resp = await self._client.get(
+                f"{self._api_url}/repos/search",
+                params={"limit": 50},
+            )
+            resp.raise_for_status()
+            data = resp.json()
 
             repos: list[dict[str, Any]] = data.get("data", []) if isinstance(data, dict) else data
             if not repos:
@@ -98,13 +131,9 @@ class GiteaOps:
             return "Gitea URL이 설정되지 않았습니다."
 
         try:
-            async with httpx.AsyncClient(timeout=self._timeout) as client:
-                resp = await client.get(
-                    f"{self._api_url}/repos/{owner}/{name}",
-                    headers=self._headers(),
-                )
-                resp.raise_for_status()
-                repo = resp.json()
+            resp = await self._client.get(f"{self._api_url}/repos/{owner}/{name}")
+            resp.raise_for_status()
+            repo = resp.json()
 
             lines = [f"Repository: {repo.get('full_name', 'unknown')}"]
             lines.append(f"  Description: {repo.get('description', '(none)')}")
@@ -144,14 +173,9 @@ class GiteaOps:
                 "private": private,
                 "auto_init": True,
             }
-            async with httpx.AsyncClient(timeout=self._timeout) as client:
-                resp = await client.post(
-                    f"{self._api_url}/user/repos",
-                    headers=self._headers(),
-                    json=payload,
-                )
-                resp.raise_for_status()
-                repo = resp.json()
+            resp = await self._client.post(f"{self._api_url}/user/repos", json=payload)
+            resp.raise_for_status()
+            repo = resp.json()
 
             return f"저장소 '{repo.get('full_name', name)}' 생성 완료.\n  Clone URL: {repo.get('clone_url', '')}"
         except httpx.HTTPStatusError as exc:
@@ -173,12 +197,8 @@ class GiteaOps:
             return "Gitea URL이 설정되지 않았습니다."
 
         try:
-            async with httpx.AsyncClient(timeout=self._timeout) as client:
-                resp = await client.delete(
-                    f"{self._api_url}/repos/{owner}/{name}",
-                    headers=self._headers(),
-                )
-                resp.raise_for_status()
+            resp = await self._client.delete(f"{self._api_url}/repos/{owner}/{name}")
+            resp.raise_for_status()
 
             return f"저장소 '{owner}/{name}' 삭제 완료."
         except httpx.HTTPStatusError as exc:
@@ -200,13 +220,9 @@ class GiteaOps:
             return "Gitea URL이 설정되지 않았습니다."
 
         try:
-            async with httpx.AsyncClient(timeout=self._timeout) as client:
-                resp = await client.get(
-                    f"{self._api_url}/repos/{owner}/{repo}/branches",
-                    headers=self._headers(),
-                )
-                resp.raise_for_status()
-                branches = resp.json()
+            resp = await self._client.get(f"{self._api_url}/repos/{owner}/{repo}/branches")
+            resp.raise_for_status()
+            branches = resp.json()
 
             if not branches:
                 return f"저장소 '{owner}/{repo}'에 브랜치가 없습니다."
@@ -234,14 +250,9 @@ class GiteaOps:
             return "Gitea URL이 설정되지 않았습니다."
 
         try:
-            async with httpx.AsyncClient(timeout=self._timeout) as client:
-                resp = await client.get(
-                    f"{self._api_url}/admin/users",
-                    headers=self._headers(),
-                    params={"limit": 50},
-                )
-                resp.raise_for_status()
-                users = resp.json()
+            resp = await self._client.get(f"{self._api_url}/admin/users", params={"limit": 50})
+            resp.raise_for_status()
+            users = resp.json()
 
             if not users:
                 return "사용자가 없습니다."
@@ -291,14 +302,12 @@ class GiteaOps:
                     "content_type": "json",
                 },
             }
-            async with httpx.AsyncClient(timeout=self._timeout) as client:
-                resp = await client.post(
-                    f"{self._api_url}/repos/{owner}/{repo}/hooks",
-                    headers=self._headers(),
-                    json=payload,
-                )
-                resp.raise_for_status()
-                hook = resp.json()
+            resp = await self._client.post(
+                f"{self._api_url}/repos/{owner}/{repo}/hooks",
+                json=payload,
+            )
+            resp.raise_for_status()
+            hook = resp.json()
 
             return (
                 f"웹훅 생성 완료 (ID: {hook.get('id', 'unknown')})\n"
@@ -324,13 +333,9 @@ class GiteaOps:
             return "Gitea URL이 설정되지 않았습니다."
 
         try:
-            async with httpx.AsyncClient(timeout=self._timeout) as client:
-                resp = await client.get(
-                    f"{self._api_url}/repos/{owner}/{repo}/hooks",
-                    headers=self._headers(),
-                )
-                resp.raise_for_status()
-                hooks = resp.json()
+            resp = await self._client.get(f"{self._api_url}/repos/{owner}/{repo}/hooks")
+            resp.raise_for_status()
+            hooks = resp.json()
 
             if not hooks:
                 return f"저장소 '{owner}/{repo}'에 웹훅이 없습니다."
@@ -389,11 +394,14 @@ class GiteaOps:
 
         Args:
             repo_url: 클론할 저장소 URL
-            path: 클론 대상 경로
+            path: 클론 대상 경로 (sandbox 내여야 함)
 
         Returns:
             클론 결과 메시지
         """
+        error = self._validate_git_path(path)
+        if error:
+            return error
         result = await self._run_git(["clone", repo_url, path])
         return f"git clone {repo_url} -> {path}\n{result}"
 
@@ -401,11 +409,14 @@ class GiteaOps:
         """최신 변경사항을 가져옵니다.
 
         Args:
-            path: Git 작업 디렉토리 경로
+            path: Git 작업 디렉토리 경로 (sandbox 내여야 함)
 
         Returns:
             pull 결과 메시지
         """
+        error = self._validate_git_path(path)
+        if error:
+            return error
         result = await self._run_git(["pull"], cwd=path)
         return f"git pull ({path})\n{result}"
 
@@ -413,11 +424,14 @@ class GiteaOps:
         """Git 상태를 확인합니다.
 
         Args:
-            path: Git 작업 디렉토리 경로
+            path: Git 작업 디렉토리 경로 (sandbox 내여야 함)
 
         Returns:
             상태 문자열
         """
+        error = self._validate_git_path(path)
+        if error:
+            return error
         result = await self._run_git(["status", "--short"], cwd=path)
         return f"git status ({path})\n{result}"
 
@@ -425,12 +439,15 @@ class GiteaOps:
         """모든 변경사항을 커밋하고 푸시합니다.
 
         Args:
-            path: Git 작업 디렉토리 경로
+            path: Git 작업 디렉토리 경로 (sandbox 내여야 함)
             message: 커밋 메시지
 
         Returns:
             커밋 및 푸시 결과 메시지
         """
+        error = self._validate_git_path(path)
+        if error:
+            return error
         add_result = await self._run_git(["add", "-A"], cwd=path)
         commit_result = await self._run_git(["commit", "-m", message], cwd=path)
         push_result = await self._run_git(["push"], cwd=path)
