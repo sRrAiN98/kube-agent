@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from collections.abc import Callable
 from typing import Any
 
 from prompt_toolkit import PromptSession
@@ -252,69 +253,51 @@ class Agent:
         )
         return any(marker in content for marker in continuation_markers)
 
-    async def _handle_user_input(self, user_input: str) -> None:
-        """사용자 입력을 처리하고 자율 실행 모드로 LLM 응답을 처리합니다.
+    async def execute_prompt(
+        self,
+        prompt: str,
+        on_token: Callable[[str], None] | None = None,
+    ) -> str:
+        """프롬프트를 자율적으로 실행하고 최종 텍스트 결과를 반환합니다.
 
-        LLM이 도구를 호출하는 동안은 자동으로 반복하고,
-        텍스트로 응답하더라도 작업이 완료되지 않았으면
-        자동으로 계속 진행을 요청합니다.
+        CLI 대화형 셸뿐만 아니라 실시간 API 서버 및 배치 자동화 모드에서도
+        자율적인 에이전트 실행을 수행할 수 있습니다.
 
         Args:
-            user_input: 사용자가 입력한 텍스트
-        """
-        cli.print_user_input(user_input)
+            prompt: 실행할 작업 지시 문구
+            on_token: 실시간 토큰 스트리밍 콜백 (선택)
 
-        # 사용자 메시지 추가
-        self._messages.append({"role": "user", "content": user_input})
+        Returns:
+            최종 어시스턴트 응답 문자열
+        """
+        self._messages.append({"role": "user", "content": prompt})
         self._trim_messages()
 
-        cli.print_thinking()
+        final_content = ""
 
         for round_idx in range(self._config.max_auto_continue + 1):
-            started_streaming = False
-
-            def on_token(token: str) -> None:
-                nonlocal started_streaming
-                if not started_streaming:
-                    cli.start_stream_response()
-                    started_streaming = True
-                cli.print_stream_token(token)
-
-            # LLM 호출 (토큰 스트리밍 연동)
             response = await self._llm.chat(
                 messages=self._messages,
                 tools=TOOLS,
                 on_token=on_token,
             )
 
-            if started_streaming:
-                cli.end_stream_response()
-
-            # tool_calls가 있으면 모두 처리한 후 최종 응답 받음
             if "tool_calls" in response:
                 response = await self._process_tool_calls(response)
 
-            # 텍스트 응답 표시 (이미 스트리밍되지 않은 경우에만 전체 출력)
             content = response.get("content", "")
             if content:
-                if not started_streaming:
-                    cli.print_agent_response(content)
+                final_content = content
                 self._messages.append({"role": "assistant", "content": content})
             else:
-                cli.print_info("(no response)")
                 break
 
-            # 자율 실행 최대 횟수 도달
             if round_idx >= self._config.max_auto_continue:
                 break
 
-            # 작업 완료 여부 판단
             if not self._needs_continuation(response):
                 break
 
-            # 자동 계속 진행
-            round_num = round_idx + 1
-            cli.print_auto_continue(round_num, self._config.max_auto_continue)
             self._messages.append({
                 "role": "user",
                 "content": (
@@ -323,6 +306,40 @@ class Agent:
                 ),
             })
             self._trim_messages()
+
+        return final_content
+
+    async def _handle_user_input(self, user_input: str) -> None:
+        """사용자 입력을 처리하고 자율 실행 모드로 LLM 응답을 처리합니다.
+
+        Args:
+            user_input: 사용자가 입력한 텍스트
+        """
+        cli.print_user_input(user_input)
+        cli.print_thinking()
+
+        started_streaming = False
+
+        def on_token(token: str) -> None:
+            nonlocal started_streaming
+            if not started_streaming:
+                cli.start_stream_response()
+                started_streaming = True
+            cli.print_stream_token(token)
+
+        final_content = await self.execute_prompt(user_input, on_token=on_token)
+
+        if started_streaming:
+            cli.end_stream_response()
+        elif final_content:
+            cli.print_agent_response(final_content)
+        else:
+            cli.print_info("(no response)")
+
+    async def close(self) -> None:
+        """에이전트가 사용하는 외부 연결 리소스를 정리합니다."""
+        await self._gitea.close()
+        await self._obs.close()
 
     async def run(self) -> None:
         """에이전트 메인 루프를 시작합니다.
@@ -379,5 +396,4 @@ class Agent:
                     logger.exception("Agent loop 예외")
                     continue
         finally:
-            await self._gitea.close()
-            await self._obs.close()
+            await self.close()

@@ -54,9 +54,11 @@ kube-agent/
 ├── kube-agent.example.yaml # 팀 공용 설정 템플릿
 └── src/kube_agent/
     ├── __init__.py
-    ├── main.py             # Click CLI 엔트리포인트 (YAML / Read-Only / 관측성 지원)
+    ├── main.py             # Click CLI 엔트리포인트 (chat, serve, batch 하위 명령)
     ├── config.py           # YAML / 환경변수 / CLI 인자 통합 설정
     ├── agent.py            # LLM <-> Tool 루프 + 자율 실행 + 서킷 브레이커 + Read-Only
+    ├── server.py           # 실시간 REST API 및 Alertmanager Webhook 서버 (Mode 2)
+    ├── batch.py            # AI 토큰 절감형 지속적 헬스 체크 & 자동 복구 엔진 (Mode 3)
     ├── llm.py              # AsyncOpenAI 클라이언트 (토큰 스트리밍 지원)
     ├── cli.py              # Rich 터미널 UI (실시간 스트리밍 & 안전 경고)
     ├── safety.py           # 도구 실행 위험도 평가 및 안전 가드레일 (Read-Only 포함)
@@ -71,16 +73,18 @@ kube-agent/
 
 각 모듈의 역할:
 
-- `main.py`: Click 프레임워크로 CLI 인자를 파싱하고 에이전트를 초기화한다.
-- `config.py`: CLI 인자와 환경 변수를 통합해 설정 객체를 생성한다.
-- `agent.py`: LLM과의 대화 루프를 관리하고 도구 호출을 조율한다. 서킷 브레이커와 자율 계속 진행을 제어한다.
+- `main.py`: Click 프레임워크로 CLI 인자를 파싱하고 3가지 모드(`chat`, `serve`, `batch`)를 실행한다.
+- `config.py`: CLI 인자, 환경 변수, `kube-agent.yaml`을 계층화하여 설정을 확정한다.
+- `agent.py`: LLM 대화 루프, 도구 호출 조율, 서킷 브레이커, 자율 계속 진행을 제어한다.
+- `server.py`: aiohttp 기반 REST API 서버로 `/healthz`, `/api/v1/chat`, `/api/v1/diagnose`, `/api/v1/webhook` 엔드포인트를 제공한다.
+- `batch.py`: 룰 기반 사전 검사(Zero-Token) 후 장애 감지 시에만 선별적으로 LLM을 호출하여 리포트 작성 및 자동 복구를 수행한다.
 - `llm.py`: AsyncOpenAI 클라이언트를 래핑해 LLM API 통신 및 실시간 토큰 스트리밍을 담당한다.
 - `cli.py`: Rich 라이브러리를 사용해 터미널 출력을 렌더링한다.
-- `safety.py`: 파괴적 명령(저장소 삭제, scale 0)을 감지하고 사용자 승인을 유도한다.
+- `safety.py`: 파괴적 명령(저장소 삭제, scale 0)을 감지하고 승인/차단을 제어한다.
 - `context.py`: 오래된 대형 도구 출력을 스마트하게 요약/압축해 LLM 컨텍스트 한계를 방어한다.
 - `tools.py`: 34개 도구의 스키마를 정의하고 실제 함수로 디스패치한다.
 - `kubernetes_ops.py`: kubernetes Python 클라이언트를 사용해 K8s API를 호출한다 (클러스터 종합 진단 지원).
-- `observability_ops.py`: httpx를 통해 Prometheus PromQL 및 Grafana Loki LogQL 관측성 데이터를 쿼리한다.
+- `observability_ops.py`: Prometheus PromQL 및 Grafana Loki LogQL 관측성 데이터를 쿼리한다.
 - `gitea_ops.py`: httpx로 Gitea REST API를 호출하고 subprocess로 Git CLI를 실행한다.
 - `helm_ops.py`: Helm CLI를 서브프로세스로 안전하게 래핑하여 차트 배포 및 롤백을 제어한다.
 - `file_ops.py`: 로컬 파일 목록 조회, 읽기, 쓰기를 지원한다. 보안을 위해 `/tmp`와 `/home/agent` 디렉토리만 접근 가능하다.
@@ -224,75 +228,163 @@ helm uninstall kube-agent -n kube-agent
 
 ---
 
-## 5. 사용 방법
+## 5. 사용 방법 및 3가지 운영 모드
 
-### 5.1. Pod에 접속하여 실행
+`kube-agent`는 단일 바이너리로 3가지 핵심 운영 패턴을 완벽히 지원합니다:
+1. **대화형 챗 모드 (`chat`)**: 엔지니어가 직접 터미널에서 대화하며 작업 수행
+2. **실시간 서버 & 웹훅 모드 (`serve`)**: 외부 솔루션, 챗봇, Alertmanager가 HTTP로 에이전트 호출
+3. **토큰 절감형 배치 모드 (`batch`)**: AI 비용을 최소화하며 정기 헬스체크 및 자동 복구 수행
 
-kube-agent는 Pod 내부에서 실행하는 대화형 CLI 도구다. 먼저 Pod에 접속한 뒤 명령을 실행한다.
+---
+
+### 5.1. 모드 1: 대화형 인터랙티브 셸 (Interactive Chat)
+
+개발자 로컬 워크스테이션 또는 클러스터 내 Pod에서 직접 실행합니다.
 
 ```bash
-# Pod에 대화형 셸 접속
-kubectl exec -it -n kube-agent deploy/kube-agent -- kube-agent
+# 기본 실행 (kubeconfig 활성 네임스페이스 자동 감지)
+kube-agent
 
-# LLM URL 직접 지정
-kubectl exec -it -n kube-agent deploy/kube-agent -- kube-agent --llm-url http://my-llm:8000/v1
+# 읽기 전용 안전 모드로 실행
+kube-agent --read-only
+
+# 네임스페이스 및 LLM 지정
+kube-agent -n prod --llm-url http://my-llm:8000/v1
 ```
 
-### 5.2. CLI 옵션 전체 목록
-
-| 옵션 | 단축 | 환경 변수 | 기본값 | 설명 |
-|------|------|-----------|--------|------|
-| `--llm-url` | `-l` | `KUBE_AGENT_LLM_URL` | `http://litellm.litellm.svc.cluster.local:4000/v1` | LLM API 엔드포인트 |
-| `--llm-model` | `-m` | `KUBE_AGENT_LLM_MODEL` | `gpt-4o` | LLM 모델명 |
-| `--llm-api-key` | — | `KUBE_AGENT_LLM_API_KEY` | `no-key` | LLM API 키 |
-| `--gitea-url` | `-g` | `KUBE_AGENT_GITEA_URL` | — | Gitea 서버 URL |
-| `--gitea-token` | — | `KUBE_AGENT_GITEA_TOKEN` | — | Gitea API 토큰 |
-| `--namespace` | `-n` | `KUBE_AGENT_NAMESPACE` | `default` (Pod 안에서는 자동 감지) | K8s 네임스페이스 |
-| `--kube-context` | — | `KUBE_AGENT_CONTEXT` | 현재 컨텍스트 | K8s 컨텍스트 |
-| `--verbose` | `-v` | — | `false` | 디버그 로깅 |
-| `--version` | — | — | — | 버전 출력 |
-| `--help` | `-h` | — | — | 도움말 |
-
-설정 우선순위: CLI 인자 > 환경 변수 > 기본값
-
-### 5.3. 대화 예시
-
-```
--- kube-agent --
+```text
+-- kube-agent 2.0 (Team Edition) --
 Connected to LLM: http://litellm.litellm.svc.cluster.local:4000/v1
 Namespace:        kube-agent
-Gitea:            http://gitea.ops.svc.cluster.local:3000
+Safety Mode:      strict
+Prometheus:       http://prometheus-k8s.monitoring.svc.cluster.local:9090
+Loki:             http://loki-gateway.logging.svc.cluster.local:3100
 
 Type your message and press Enter. Ctrl+C to cancel, Ctrl+D to exit.
 
-You: 현재 네임스페이스의 Pod 목록을 보여줘
-
+You: 클러스터에 이상 있는 파드 있나 진단해줘
 Thinking...
-Tool: k8s_list_pods
-╭─ k8s_list_pods ─╮
-│ NAME                              STATUS    RESTARTS  AGE     │
-│ ──────────────────────────────────────────────────────────     │
-│ kube-agent-7cfd9679bc-qsdmp       Running   0         5m      │
-│ my-app-6b8d4f7c9d-abc12           Running   0         2h      │
-╰──────────────────╯
-
-Agent: 현재 kube-agent 네임스페이스에 2개의 Pod가 실행 중입니다...
-
-You: my-app 디플로이먼트를 재시작해줘
-
-Thinking...
-Tool: k8s_restart_deployment
-╭─ k8s_restart_deployment ─╮
-│ Deployment 'my-app' 롤링 재시작을 시작했습니다.               │
-╰───────────────────────────╯
-
-Agent: my-app 디플로이먼트의 롤링 재시작을 시작했습니다. 잠시 후 Pod가 새로 생성됩니다.
-
-You: exit
-Goodbye!
+Tool: k8s_diagnose_cluster
+Agent: payment-api 파드가 CrashLoopBackOff 상태이며 직전 종료 코드는 137(OOMKilled)입니다.
 ```
 
-### 5.4. 키보드 단축키
+---
+
+### 5.2. 모드 2: 실시간 솔루션 연동 서버 & Alert Webhook (`serve`)
+
+사내 모니터링 시스템, Slack 챗봇 백엔드, 또는 Prometheus Alertmanager에서 `kube-agent`를 백그라운드 서비스로 띄워두고 REST API 및 Webhook을 수신합니다.
+
+```bash
+# 기본 8080 포트로 서버 실행
+kube-agent serve --port 8080 --host 0.0.0.0
+```
+
+#### REST API 엔드포인트 명세
+
+| Method | Path | 설명 | 요청 본문 예시 |
+|---|---|---|---|
+| `GET` | `/healthz` | 서비스 상태 및 네임스페이스 확인 | — |
+| `POST` | `/api/v1/chat` | 에이전트 자율 질의 및 조치 수행 | `{"prompt": "파드 상태 점검"}` |
+| `POST` | `/api/v1/diagnose` | 원클릭 클러스터 정밀 진단 | `{"namespace": "prod"}` |
+| `POST` | `/api/v1/webhook` | Alertmanager / Grafana Webhook 수신 | Alertmanager 표준 JSON |
+
+#### cURL 호출 예제
+```bash
+# 실시간 질의
+curl -X POST http://localhost:8080/api/v1/chat \
+  -H "Content-Type: application/json" \
+  -d '{"prompt": "my-app 파드의 에러 로그 요약하고 원인 진단해줘"}'
+
+# 원클릭 정밀 진단
+curl -X POST http://localhost:8080/api/v1/diagnose \
+  -H "Content-Type: application/json" \
+  -d '{"namespace": "default"}'
+```
+
+#### Prometheus Alertmanager 연동
+경보 발생 시 즉각 에이전트가 호출되어 근본 원인을 자동 분석하도록 Alertmanager에 설정합니다:
+```yaml
+# alertmanager.yaml
+route:
+  receiver: "kube-agent-webhook"
+receivers:
+  - name: "kube-agent-webhook"
+    webhook_configs:
+      - url: "http://kube-agent.kube-agent.svc.cluster.local:8080/api/v1/webhook"
+        send_resolved: false
+```
+
+---
+
+### 5.3. 모드 3: AI 토큰 비용 최적화 지속적 점검 및 자동 복구 배치 (`batch`)
+
+AI 호출 비용을 획기적으로 줄이기 위해 **Zero-Token Pre-flight** 메커니즘을 사용합니다.
+- **클러스터 정상 시**: 룰 기반 검사만 수행하고 **AI 토큰 소비 0회 ($0.00)**로 정상 리포트 발행.
+- **장애 발견 시**: 선별적으로 LLM을 호출하여 장애 원인 분석 및 복구 권고안 생성 (선택 시 자동 복구).
+
+```bash
+# 1회 점검 실행 (CronJob 적합, 정상 시 비용 0원)
+kube-agent batch --report-dir ./reports
+
+# 장애 발견 시 안전 자동 복구(Deployment 재시작, 파드 재기동 등) 허용
+kube-agent batch --report-dir ./reports --auto-fix
+
+# 데몬 모드로 주기적 자동 실행 (300초 = 5분 주기)
+kube-agent batch --interval 300 --report-dir ./reports --auto-fix
+```
+
+#### Kubernetes CronJob 배포 매니페스트
+```yaml
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: kube-agent-periodic-check
+  namespace: kube-agent
+spec:
+  schedule: "*/10 * * * *" # 10분마다 실행
+  concurrencyPolicy: Forbid
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          serviceAccountName: kube-agent
+          containers:
+            - name: batch-checker
+              image: docker.io/srrain98/kube-agent:0.2.0
+              command: ["kube-agent", "batch", "--report-dir", "/reports", "--auto-fix"]
+              volumeMounts:
+                - name: reports
+                  mountPath: /reports
+          restartPolicy: OnFailure
+          volumes:
+            - name: reports
+              persistentVolumeClaim:
+                claimName: kube-agent-reports-pvc
+```
+
+---
+
+### 5.4. CLI 옵션 전체 레퍼런스
+
+| 옵션 | 단축 | 환경 변수 | 기본값 | 설명 |
+|------|------|-----------|--------|------|
+| `--config` | `-c` | `KUBE_AGENT_CONFIG` | `./kube-agent.yaml` | YAML 설정 파일 경로 |
+| `--llm-url` | `-l` | `KUBE_AGENT_LLM_URL` | LiteLLM 엔드포인트 | LLM API 엔드포인트 |
+| `--llm-model` | `-m` | `KUBE_AGENT_LLM_MODEL` | `gpt-4o` | LLM 모델명 |
+| `--llm-api-key` | — | `KUBE_AGENT_LLM_API_KEY` | `no-key` | LLM API 인증키 |
+| `--namespace` | `-n` | `KUBE_AGENT_NAMESPACE` | 활성 네임스페이스 | K8s 작업 네임스페이스 |
+| `--kube-context` | — | `KUBE_AGENT_CONTEXT` | 활성 컨텍스트 | K8s 컨텍스트 |
+| `--prometheus-url` | — | `KUBE_AGENT_PROMETHEUS_URL` | — | Prometheus 서버 URL |
+| `--loki-url` | — | `KUBE_AGENT_LOKI_URL` | — | Grafana Loki 서버 URL |
+| `--read-only` | — | `KUBE_AGENT_READ_ONLY` | `false` | 읽기 전용 모드 (모든 상태 변경 차단) |
+| `--safety-mode` | — | `KUBE_AGENT_SAFETY_MODE` | `strict` | 안전 가드레일 모드 |
+| `--verbose` | `-v` | — | `false` | 디버그 상세 로깅 |
+
+설정 우선순위: **CLI 플래그 > 환경 변수 > `kube-agent.yaml` > 기본값**
+
+---
+
+### 5.5. 키보드 단축키 (대화형 셸)
 
 | 키 | 동작 |
 |----|------|

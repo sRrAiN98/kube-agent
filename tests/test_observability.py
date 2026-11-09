@@ -167,3 +167,4 @@ async def test_loki_query_empty_results():
         assert "0건 반환" in res
     finally:
         await obs.close()
+

@@ -8,8 +8,13 @@ specs:
 
     image:
       repository: docker.io/srrain98/kube-agent
-      tag: "0.1.0"
+      tag: "0.2.0"
       pullPolicy: IfNotPresent
+
+    command: ["sleep"]
+    args: ["infinity"]
+    stdin: true
+    tty: true
 
     env:
       # LLM 설정
@@ -34,6 +39,13 @@ specs:
             optional: true
       - name: KUBE_AGENT_GITEA_TIMEOUT
         value: "30"
+      # 관측성 (Prometheus & Loki) 설정
+      - name: KUBE_AGENT_PROMETHEUS_URL
+        value: "http://prometheus-k8s.monitoring.svc.cluster.local:9090"
+      - name: KUBE_AGENT_LOKI_URL
+        value: "http://loki-gateway.logging.svc.cluster.local:3100"
+      - name: KUBE_AGENT_SAFETY_MODE
+        value: "strict"
       # Kubernetes 설정
       - name: KUBE_AGENT_NAMESPACE
         valueFrom:

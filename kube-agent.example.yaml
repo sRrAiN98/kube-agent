@@ -43,3 +43,4 @@ max_messages: 80
 max_tool_iterations: 30
 max_auto_continue: 5
 tool_result_max_chars: 3000
+

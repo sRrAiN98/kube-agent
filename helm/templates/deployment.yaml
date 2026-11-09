@@ -101,6 +101,12 @@ spec:
           args:
             {{- toYaml . | nindent 12 }}
           {{- end }}
+          {{- if hasKey $spec "stdin" }}
+          stdin: {{ $spec.stdin }}
+          {{- end }}
+          {{- if hasKey $spec "tty" }}
+          tty: {{ $spec.tty }}
+          {{- end }}
           {{- with $spec.lifecycle }}
           lifecycle:
             {{- toYaml . | nindent 12 }}
