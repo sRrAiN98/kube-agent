@@ -4,8 +4,8 @@
 # ---- 1단계: 빌더 이미지 ----
 FROM python:3.11-slim AS builder
 
-ARG KUBECTL_VERSION="v1.31.2"
-ARG HELM_VERSION="v3.16.3"
+ARG KUBECTL_VERSION=""
+ARG HELM_VERSION=""
 
 # 빌드 도구 설치
 RUN apt-get update && \
@@ -14,15 +14,17 @@ RUN apt-get update && \
         ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-# kubectl 바이너리 다운로드 (멀티 아키텍처 amd64/arm64 지원)
+# kubectl 바이너리 다운로드 (빌드 시점 최신 stable 자동 조회, amd64/arm64 지원)
 RUN ARCH="$(dpkg --print-architecture)" && \
-    curl -fsSL "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/${ARCH}/kubectl" \
+    VERSION="${KUBECTL_VERSION:-$(curl -fsSL https://dl.k8s.io/release/stable.txt)}" && \
+    curl -fsSL "https://dl.k8s.io/release/${VERSION}/bin/linux/${ARCH}/kubectl" \
         -o /usr/local/bin/kubectl && \
     chmod +x /usr/local/bin/kubectl
 
-# Helm 바이너리 다운로드
+# Helm 바이너리 다운로드 (빌드 시점 최신 Helm 4+ 자동 조회, amd64/arm64 지원)
 RUN ARCH="$(dpkg --print-architecture)" && \
-    curl -fsSL "https://get.helm.sh/helm-${HELM_VERSION}-linux-${ARCH}.tar.gz" | tar -xz -C /tmp && \
+    VERSION="${HELM_VERSION:-$(curl -fsSL https://get.helm.sh/helm-latest-version)}" && \
+    curl -fsSL "https://get.helm.sh/helm-${VERSION}-linux-${ARCH}.tar.gz" | tar -xz -C /tmp && \
     mv "/tmp/linux-${ARCH}/helm" /usr/local/bin/helm && \
     chmod +x /usr/local/bin/helm && \
     rm -rf "/tmp/linux-${ARCH}"
