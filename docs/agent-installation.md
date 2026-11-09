@@ -196,3 +196,4 @@ ruff check .
 
 - **통과 기준**: `82 passed` 및 `All checks passed!`
 - 이 테스트를 통과하면 `kube-agent`의 모든 기능(K8s, Prometheus, Loki, Helm 4, Gitea, Server, Batch)이 온전히 준비된 것입니다.
+
