@@ -60,3 +60,52 @@ def test_scale_deployment(mock_k8s_ops: KubernetesOps) -> None:
     result = mock_k8s_ops.scale_deployment("web-deploy", replicas=5)
     assert "5개로 조정했습니다" in result
 
+
+def test_diagnose_cluster_healthy(mock_k8s_ops: KubernetesOps) -> None:
+    """모든 Pod가 정상일 때 정상 진단 결과를 반환해야 합니다."""
+    pod = MagicMock()
+    pod.metadata.name = "healthy-pod"
+    pod.status.phase = "Running"
+    pod.status.container_statuses = []
+
+    mock_k8s_ops._core.list_namespaced_pod.return_value = MagicMock(items=[pod])
+    mock_k8s_ops._core.list_namespaced_event.return_value = MagicMock(items=[])
+
+    report = mock_k8s_ops.diagnose_cluster()
+    assert "모든 Pod가 정상(Running/Ready) 상태이며 탐지된 장애가 없습니다" in report
+
+
+def test_diagnose_cluster_detects_issues(mock_k8s_ops: KubernetesOps) -> None:
+    """CrashLoop 및 OOMKilled 발생 Pod를 탐지하고 리포트해야 합니다."""
+    pod = MagicMock()
+    pod.metadata.name = "crash-pod"
+    pod.status.phase = "Running"
+
+    cs = MagicMock()
+    cs.name = "app"
+    cs.restart_count = 5
+    cs.state.waiting.reason = "CrashLoopBackOff"
+    cs.state.waiting.message = "back-off 5m restarting failed container"
+    cs.last_state.terminated.exit_code = 137
+    cs.last_state.terminated.reason = "OOMKilled"
+    pod.status.container_statuses = [cs]
+
+    mock_k8s_ops._core.list_namespaced_pod.return_value = MagicMock(items=[pod])
+
+    ev = MagicMock()
+    ev.type = "Warning"
+    ev.reason = "BackOff"
+    ev.message = "Back-off restarting failed container"
+    ev.involved_object.kind = "Pod"
+    ev.involved_object.name = "crash-pod"
+    mock_k8s_ops._core.list_namespaced_event.return_value = MagicMock(items=[ev])
+
+    report = mock_k8s_ops.diagnose_cluster()
+    assert "탐지된 비정상 Pod: 1개" in report
+    assert "crash-pod" in report
+    assert "CrashLoopBackOff" in report
+    assert "OOMKilled" in report
+    assert "잦은 재시작 (5회)" in report
+    assert "Back-off restarting failed container" in report
+
+

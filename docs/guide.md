@@ -9,13 +9,15 @@ kube-agent는 오프라인 온프레미스 환경에서 Kubernetes 클러스터�
 ### 주요 기능
 
 - Kubernetes 리소스 조회 및 관리 (Pod, Deployment, Service, ConfigMap, Secret, Event)
+- Kubernetes 클러스터/네임스페이스 원클릭 정밀 진단 (`k8s_diagnose_cluster`)
+- 관측성(Observability) 연동: Prometheus PromQL 메트릭 조회 및 Grafana Loki LogQL 분산 로그 분석
 - Gitea 저장소 관리 (저장소 생성/삭제, 브랜치 조회, 웹훅 설정, Git 작업)
-- Helm 차트 관리 (차트 린트, 템플릿 검증, 릴리스 업그레이드/설치, 롤백)
-- 총 31개 도구 내장 (Kubernetes 12개 + Gitea 12개 + Helm 4개 + 파일 3개)
-- 안전 가드레일: 파괴적 명령(저장소 삭제, scale 0 등) 실행 전 대화형 사용자 확인
+- Helm 차트 관리 (차트 린트, 템플릿 검증, 릴리스 업그레이드/설치, 롤백 - Helm 4+ 지원)
+- 총 34개 도구 내장 (Kubernetes 13개 + 관측성 2개 + Gitea 12개 + Helm 4개 + 파일 3개)
+- 안전 가드레일 & Read-Only 모드: 파괴적 명령 실행 전 승인 확인 및 상태 변경 원천 차단 모드
 - Rich 터미널 UI (실시간 토큰 스트리밍 지원)
-- 클러스터 내 ServiceAccount를 통한 인증 (kubeconfig 불필요)
-- 환경 변수 또는 CLI 인자로 유연한 설정
+- 클러스터 내 ServiceAccount 및 로컬 `~/.kube/config` 활성 컨텍스트/네임스페이스 자동 감지
+- YAML 설정 파일(`kube-agent.yaml`), 환경 변수, CLI 인자로 유연한 팀 설정 지원
 - 자율 실행 & 서킷 브레이커: 동일 작업 반복 실패 조기 감지 및 자동 계속 진행
 
 ---
@@ -33,10 +35,10 @@ CLI (Rich / prompt_toolkit)
   |
   | (자연어 메시지)
   v
-Agent Loop  <------>  LLM (OpenAI 호환 API: vLLM / LiteLLM)
+Agent Loop  <------>  LLM (OpenAI 호환 API: vLLM / LiteLLM / OpenAI)
   |
-  |---> K8s API (ServiceAccount 인증, 네임스페이스 스코프)
-  |
+  |---> K8s API (ServiceAccount 또는 로컬 ~/.kube/config)
+  |---> Observability API (Prometheus PromQL & Loki LogQL)
   '---> Gitea API (REST API + Git CLI, 토큰 인증)
 ```
 
@@ -47,19 +49,21 @@ Agent Loop  <------>  LLM (OpenAI 호환 API: vLLM / LiteLLM)
 ```
 kube-agent/
 ├── pyproject.toml          # 프로젝트 메타데이터, 의존성 (v0.2.0)
-├── Dockerfile              # 멀티스테이지 캐시 최적화 빌드
+├── Dockerfile              # 멀티스테이지 캐시 최적화 빌드 (최신 Helm 4 & kubectl)
 ├── .dockerignore           # 불필요한 파일 빌드 컨텍스트 제외
+├── kube-agent.example.yaml # 팀 공용 설정 템플릿
 └── src/kube_agent/
     ├── __init__.py
-    ├── main.py             # Click CLI 엔트리포인트
-    ├── config.py           # 환경변수/CLI 인자 설정
-    ├── agent.py            # LLM <-> Tool 루프 + 자율 실행 + 서킷 브레이커
+    ├── main.py             # Click CLI 엔트리포인트 (YAML / Read-Only / 관측성 지원)
+    ├── config.py           # YAML / 환경변수 / CLI 인자 통합 설정
+    ├── agent.py            # LLM <-> Tool 루프 + 자율 실행 + 서킷 브레이커 + Read-Only
     ├── llm.py              # AsyncOpenAI 클라이언트 (토큰 스트리밍 지원)
     ├── cli.py              # Rich 터미널 UI (실시간 스트리밍 & 안전 경고)
-    ├── safety.py           # 도구 실행 위험도 평가 및 안전 가드레일
+    ├── safety.py           # 도구 실행 위험도 평가 및 안전 가드레일 (Read-Only 포함)
     ├── context.py          # 컨텍스트 윈도우 보호 및 대형 도구 출력 압축
-    ├── tools.py            # 31개 도구 정의 + 디스패처
-    ├── kubernetes_ops.py   # K8s 12개 작업
+    ├── tools.py            # 34개 도구 정의 + 디스패처
+    ├── kubernetes_ops.py   # K8s 13개 작업 (클러스터 정밀 진단 포함)
+    ├── observability_ops.py# 관측성 (Prometheus PromQL & Loki LogQL)
     ├── gitea_ops.py        # Gitea 12개 작업
     ├── helm_ops.py         # Helm 4개 작업 (lint, template, upgrade, rollback)
     └── file_ops.py         # 파일 3개 작업 (list, read, write)
@@ -74,8 +78,9 @@ kube-agent/
 - `cli.py`: Rich 라이브러리를 사용해 터미널 출력을 렌더링한다.
 - `safety.py`: 파괴적 명령(저장소 삭제, scale 0)을 감지하고 사용자 승인을 유도한다.
 - `context.py`: 오래된 대형 도구 출력을 스마트하게 요약/압축해 LLM 컨텍스트 한계를 방어한다.
-- `tools.py`: 31개 도구의 스키마를 정의하고 실제 함수로 디스패치한다.
-- `kubernetes_ops.py`: kubernetes Python 클라이언트를 사용해 K8s API를 호출한다.
+- `tools.py`: 34개 도구의 스키마를 정의하고 실제 함수로 디스패치한다.
+- `kubernetes_ops.py`: kubernetes Python 클라이언트를 사용해 K8s API를 호출한다 (클러스터 종합 진단 지원).
+- `observability_ops.py`: httpx를 통해 Prometheus PromQL 및 Grafana Loki LogQL 관측성 데이터를 쿼리한다.
 - `gitea_ops.py`: httpx로 Gitea REST API를 호출하고 subprocess로 Git CLI를 실행한다.
 - `helm_ops.py`: Helm CLI를 서브프로세스로 안전하게 래핑하여 차트 배포 및 롤백을 제어한다.
 - `file_ops.py`: 로컬 파일 목록 조회, 읽기, 쓰기를 지원한다. 보안을 위해 `/tmp`와 `/home/agent` 디렉토리만 접근 가능하다.
@@ -298,9 +303,9 @@ Goodbye!
 
 ---
 
-## 6. 도구 레퍼런스
+## 6. 도구 레퍼런스 (총 34개)
 
-### 6.1. Kubernetes 도구 (12개)
+### 6.1. Kubernetes 도구 (13개)
 
 | 도구 | 설명 | 필수 인자 |
 |------|------|-----------|
@@ -316,10 +321,27 @@ Goodbye!
 | `k8s_get_configmap` | ConfigMap 상세 | `name` |
 | `k8s_list_secrets` | Secret 목록 (이름만) | — |
 | `k8s_get_events` | 네임스페이스 이벤트 | (선택: `limit`) |
+| `k8s_diagnose_cluster` | CrashLoop, OOMKilled(137), ImagePull, Pending Pod 및 Warning 이벤트 종합 진단 | (선택: `namespace`) |
 
-모든 K8s 도구는 에이전트가 실행 중인 네임스페이스를 기준으로 동작한다. 다른 네임스페이스의 리소스에는 접근할 수 없다.
+모든 K8s 도구는 에이전트가 실행 중인 네임스페이스를 기본으로 동작하며, 진단 도구는 특정 네임스페이스를 지정할 수 있습니다.
 
-### 6.2. Gitea 도구 (12개)
+### 6.2. 관측성 (Observability) 도구 (2개)
+
+| 도구 | 설명 | 필수 인자 |
+|------|------|-----------|
+| `prom_query` | Prometheus PromQL 메트릭 쿼리 실행 (CPU, 메모리, 레이턴시, 오류율 등) | `query` |
+| `loki_query` | Grafana Loki LogQL 분산 로그 쿼리 실행 | `query`, (선택: `limit`) |
+
+### 6.3. Helm 도구 (4개)
+
+| 도구 | 설명 | 필수 인자 |
+|------|------|-----------|
+| `helm_lint` | Helm 차트 문법 및 구조 검증 (`helm lint`) | `chart_path`, (선택: `values_file`) |
+| `helm_template` | Helm 차트 템플릿 렌더링 검증 (`helm template`) | `name`, `chart_path`, (선택: `values_file`, `namespace`) |
+| `helm_upgrade` | Helm 릴리스 설치/업그레이드 (`helm upgrade --install`) | `release_name`, `chart_path`, (선택: `values_file`, `install`, `namespace`) |
+| `helm_rollback` | Helm 릴리스 이전 버전 롤백 (`helm rollback`) | `release_name`, (선택: `revision`, `namespace`) |
+
+### 6.4. Gitea 도구 (12개)
 
 | 도구 | 설명 | 필수 인자 |
 |------|------|-----------|
@@ -336,9 +358,7 @@ Goodbye!
 | `gitea_git_status` | Git 상태 | `path` |
 | `gitea_commit_and_push` | 커밋 + 푸시 | `path`, `message` |
 
-Gitea 도구를 사용하려면 `--gitea-url`과 `--gitea-token` 설정이 필요하다. 설정하지 않으면 Gitea 관련 도구 호출 시 오류가 발생한다.
-
-### 6.3. 파일 도구 (3개)
+### 6.5. 파일 도구 (3개)
 
 | 도구 | 설명 | 필수 인자 |
 |------|------|-----------|
@@ -348,7 +368,7 @@ Gitea 도구를 사용하려면 `--gitea-url`과 `--gitea-token` 설정이 필�
 
 파일 도구는 보안을 위해 `/tmp`와 `/home/agent` 디렉토리만 접근 가능하다. 이 도구들은 Git으로 클론한 Helm 차트 저장소의 파일을 수정하는 데 사용된다.
 
-### 6.4. 자율 실행 모드
+### 6.6. 자율 실행 모드 및 서킷 브레이커
 
 kube-agent는 복잡한 작업을 완료될 때까지 자동으로 진행하는 자율 실행 모드를 지원한다.
 

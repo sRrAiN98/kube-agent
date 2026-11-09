@@ -467,3 +467,114 @@ class KubernetesOps:
             return f"이벤트 조회 실패: {exc.reason} (HTTP {exc.status})"
         except Exception as exc:
             return f"이벤트 조회 중 오류: {exc}"
+
+    def diagnose_cluster(self, namespace: str | None = None) -> str:
+        """클러스터/네임스페이스 내 비정상 Pod와 경고 이벤트를 정밀 진단합니다.
+
+        CrashLoopBackOff, OOMKilled, ImagePullBackOff, Evicted, Pending 등
+        비정상 상태인 Pod를 자동 탐색하고 직전 종료 원인과 관련 Warning 이벤트를
+        취합하여 종합 진단 리포트를 생성합니다.
+
+        Args:
+            namespace: 진단할 네임스페이스 (None이면 기본 네임스페이스)
+
+        Returns:
+            정밀 진단 리포트 문자열
+        """
+        ns = namespace or self.namespace
+        try:
+            pods = self._core.list_namespaced_pod(namespace=ns)
+            if not pods.items:
+                return f"네임스페이스 '{ns}'에 Pod가 없습니다."
+
+            # 경고 이벤트 사전 수집
+            warning_events_by_pod: dict[str, list[str]] = {}
+            try:
+                events = self._core.list_namespaced_event(namespace=ns)
+                for ev in events.items:
+                    if ev.type == "Warning" and ev.involved_object and ev.involved_object.kind == "Pod":
+                        pod_name = ev.involved_object.name or ""
+                        reason = ev.reason or "Warning"
+                        msg = (ev.message or "").strip()
+                        warning_events_by_pod.setdefault(pod_name, []).append(f"[{reason}] {msg}")
+            except Exception:
+                pass
+
+            issues: list[dict[str, Any]] = []
+
+            for pod in pods.items:
+                pod_name = _safe_name(pod)
+                phase = pod.status.phase if pod.status else "Unknown"
+                container_statuses = pod.status.container_statuses or [] if pod.status else []
+
+                pod_issues: list[str] = []
+
+                # 1. Phase 비정상 검사
+                if phase in ("Failed", "Unknown"):
+                    pod_issues.append(f"Pod Phase 실패: {phase}")
+                elif phase == "Pending":
+                    pod_issues.append("Pod 대기(Pending) 상태: 노드 자원 부족, taints 또는 PV 마운트 지연 가능성")
+
+                # 2. 컨테이너 상태 상세 검사
+                for cs in container_statuses:
+                    c_name = cs.name
+
+                    # waiting 상태 (CrashLoopBackOff, ImagePullBackOff 등)
+                    if cs.state and cs.state.waiting:
+                        reason = cs.state.waiting.reason or "Waiting"
+                        msg = cs.state.waiting.message or ""
+                        pod_issues.append(f"컨테이너 '{c_name}' 대기 중 ({reason}): {msg}")
+
+                    # terminated 상태 (비정상 종료 여부)
+                    if cs.last_state and cs.last_state.terminated:
+                        term = cs.last_state.terminated
+                        if term.exit_code != 0:
+                            reason = term.reason or "Terminated"
+                            detail = f"종료 코드 {term.exit_code} ({reason})"
+                            if term.reason == "OOMKilled" or term.exit_code == 137:
+                                detail += " [메모리 초과 OOMKilled 강제 종료]"
+                            pod_issues.append(f"컨테이너 '{c_name}' 직전 비정상 종료: {detail}")
+
+                    # 재시작 횟수 과다
+                    if cs.restart_count >= 3:
+                        pod_issues.append(f"컨테이너 '{c_name}' 잦은 재시작 ({cs.restart_count}회)")
+
+                if pod_issues:
+                    issues.append({
+                        "name": pod_name,
+                        "phase": phase,
+                        "reasons": pod_issues,
+                        "events": warning_events_by_pod.get(pod_name, []),
+                    })
+
+            if not issues:
+                return (
+                    f"=== Kubernetes 클러스터 진단 완료 (Namespace: {ns}) ===\n"
+                    f"확인된 Pod 수: {len(pods.items)}개\n"
+                    "상태: 모든 Pod가 정상(Running/Ready) 상태이며 탐지된 장애가 없습니다."
+                )
+
+            lines = [
+                f"=== Kubernetes 클러스터 장애 진단 리포트 (Namespace: {ns}) ===",
+                f"탐지된 비정상 Pod: {len(issues)}개 (전체 {len(pods.items)}개 중)\n",
+            ]
+
+            for idx, item in enumerate(issues, 1):
+                lines.append(f"[{idx}] Pod: {item['name']} (Phase: {item['phase']})")
+                lines.append("  발견된 문제 원인:")
+                for r in item["reasons"]:
+                    lines.append(f"    - {r}")
+
+                events = item["events"]
+                if events:
+                    lines.append("  관련 경고 이벤트(Warning Events):")
+                    for ev in events[:3]:  # 최대 3개
+                        lines.append(f"    * {ev}")
+                lines.append("")
+
+            return "\n".join(lines).strip()
+
+        except ApiException as exc:
+            return f"클러스터 진단 실패: {exc.reason} (HTTP {exc.status})"
+        except Exception as exc:
+            return f"클러스터 진단 중 오류: {exc}"

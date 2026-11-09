@@ -31,23 +31,42 @@ _THEME = Theme(
 console = Console(theme=_THEME)
 
 
-def print_banner(llm_url: str, namespace: str, gitea_url: str) -> None:
+def print_banner(
+    llm_url: str,
+    namespace: str,
+    gitea_url: str,
+    prometheus_url: str = "",
+    loki_url: str = "",
+    read_only: bool = False,
+    safety_mode: str = "strict",
+) -> None:
     """에이전트 시작 배너를 출력합니다.
 
     Args:
         llm_url: 연결된 LLM 엔드포인트 URL
         namespace: 현재 Kubernetes 네임스페이스
         gitea_url: Gitea 서버 URL
+        prometheus_url: Prometheus 서버 URL
+        loki_url: Loki 서버 URL
+        read_only: 읽기 전용 모드 활성화 여부
+        safety_mode: 안전 모드명
     """
     lines = [
-        "[banner]-- kube-agent --[/banner]",
+        "[banner]-- kube-agent 2.0 (Team Edition) --[/banner]",
         f"[info]Connected to LLM:[/info] {llm_url}",
         f"[info]Namespace:[/info]        {namespace}",
     ]
+    if read_only:
+        lines.append("[bold red]Mode:[/bold red]             READ-ONLY (모든 상태 변경 차단)")
+    else:
+        lines.append(f"[info]Safety Mode:[/info]      {safety_mode}")
+
     if gitea_url:
         lines.append(f"[info]Gitea:[/info]            {gitea_url}")
-    else:
-        lines.append("[info]Gitea:[/info]            (not configured)")
+    if prometheus_url:
+        lines.append(f"[info]Prometheus:[/info]       {prometheus_url}")
+    if loki_url:
+        lines.append(f"[info]Loki:[/info]             {loki_url}")
 
     lines.append("")
     lines.append("[dim]Type your message and press Enter. Ctrl+C to cancel, Ctrl+D to exit.[/dim]")

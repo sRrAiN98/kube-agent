@@ -22,6 +22,7 @@ from kube_agent.gitea_ops import GiteaOps
 from kube_agent.helm_ops import HelmOps
 from kube_agent.kubernetes_ops import KubernetesOps
 from kube_agent.llm import SYSTEM_PROMPT, LLMClient
+from kube_agent.observability_ops import ObservabilityOps
 from kube_agent.safety import assess_risk
 from kube_agent.tools import TOOLS, execute_tool
 
@@ -54,6 +55,10 @@ class Agent:
         )
         self._files = FileOps()
         self._helm = HelmOps(namespace=config.kube_namespace)
+        self._obs = ObservabilityOps(
+            prometheus_url=config.prometheus_url,
+            loki_url=config.loki_url,
+        )
         self._context_mgr = ContextManager(max_messages=config.max_messages or 60)
         self._failed_calls: dict[str, int] = {}
         self._messages: list[dict[str, Any]] = [
@@ -125,6 +130,23 @@ class Agent:
                     safety_mode=self._config.safety_mode,
                 )
                 if assessment.requires_confirmation:
+                    if self._config.read_only or self._config.safety_mode == "read_only":
+                        result = (
+                            f"[Read-Only 차단] 읽기 전용 모드에서는 상태 변경 작업이 금지되어 있습니다 "
+                            f"({assessment.reason}). 조회 또는 진단 도구만 사용하세요."
+                        )
+                        cli.print_tool_result(
+                            tool_name, result, max_chars=self._config.tool_result_max_chars
+                        )
+                        self._messages.append(
+                            {
+                                "role": "tool",
+                                "tool_call_id": tool_id,
+                                "content": result,
+                            }
+                        )
+                        continue
+
                     cli.print_safety_warning(assessment)
                     confirmed = cli.ask_confirmation()
                     if not confirmed:
@@ -152,6 +174,7 @@ class Agent:
                     gitea=self._gitea,
                     files=self._files,
                     helm=self._helm,
+                    obs=self._obs,
                 )
 
                 # 실패 기록 추적 (서킷 브레이커용)
@@ -311,6 +334,10 @@ class Agent:
             llm_url=self._config.llm_base_url,
             namespace=self._config.kube_namespace,
             gitea_url=self._config.gitea_url,
+            prometheus_url=self._config.prometheus_url,
+            loki_url=self._config.loki_url,
+            read_only=self._config.read_only,
+            safety_mode=self._config.safety_mode,
         )
 
         # prompt_toolkit 세션 설정
@@ -353,3 +380,4 @@ class Agent:
                     continue
         finally:
             await self._gitea.close()
+            await self._obs.close()

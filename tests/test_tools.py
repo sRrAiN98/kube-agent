@@ -123,3 +123,43 @@ class TestExecuteTool:
             install=True,
             namespace=None,
         )
+
+    @pytest.mark.asyncio
+    async def test_k8s_diagnose_cluster_dispatched(self, mocks) -> None:
+        k8s, gitea, files = mocks
+        k8s.diagnose_cluster.return_value = "cluster diagnosis ok"
+        result = await execute_tool("k8s_diagnose_cluster", {"namespace": "test"}, k8s, gitea, files)
+        assert result == "cluster diagnosis ok"
+        k8s.diagnose_cluster.assert_called_once_with(namespace="test")
+
+    @pytest.mark.asyncio
+    async def test_prom_query_dispatched(self, mocks) -> None:
+        k8s, gitea, files = mocks
+        mock_obs = AsyncMock()
+        mock_obs.query_prometheus.return_value = "prom result"
+        result = await execute_tool(
+            "prom_query",
+            {"query": "up"},
+            k8s,
+            gitea,
+            files,
+            obs=mock_obs,
+        )
+        assert result == "prom result"
+        mock_obs.query_prometheus.assert_awaited_once_with(query="up")
+
+    @pytest.mark.asyncio
+    async def test_loki_query_dispatched(self, mocks) -> None:
+        k8s, gitea, files = mocks
+        mock_obs = AsyncMock()
+        mock_obs.query_loki.return_value = "loki result"
+        result = await execute_tool(
+            "loki_query",
+            {"query": '{app="api"}'},
+            k8s,
+            gitea,
+            files,
+            obs=mock_obs,
+        )
+        assert result == "loki result"
+        mock_obs.query_loki.assert_awaited_once_with(query='{app="api"}', limit=50)

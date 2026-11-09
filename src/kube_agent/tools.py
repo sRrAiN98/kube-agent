@@ -15,6 +15,7 @@ from kube_agent.file_ops import FileOps
 from kube_agent.gitea_ops import GiteaOps
 from kube_agent.helm_ops import HelmOps
 from kube_agent.kubernetes_ops import KubernetesOps
+from kube_agent.observability_ops import ObservabilityOps
 
 logger = logging.getLogger(__name__)
 
@@ -220,6 +221,27 @@ TOOLS: list[dict[str, Any]] = [
                     "limit": {
                         "type": "integer",
                         "description": "Maximum number of events to return (default: 20).",
+                    },
+                },
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "k8s_diagnose_cluster",
+            "description": (
+                "Comprehensive diagnostic check for cluster/namespace failures. "
+                "Detects CrashLoopBackOff, OOMKilled, ImagePullBackOff, Evicted, Pending pods "
+                "and gathers Warning events and termination exit codes."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "namespace": {
+                        "type": "string",
+                        "description": "Namespace to diagnose (optional, defaults to current).",
                     },
                 },
                 "required": [],
@@ -641,6 +663,53 @@ TOOLS: list[dict[str, Any]] = [
             },
         },
     },
+    # ---- 관측성 (Prometheus & Loki) 도구 ----
+    {
+        "type": "function",
+        "function": {
+            "name": "prom_query",
+            "description": (
+                "Execute a PromQL query against Prometheus to retrieve metrics "
+                "(CPU, Memory, Network, latency, etc.)."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": (
+                            "The PromQL query string "
+                            "(e.g., 'sum(rate(container_cpu_usage_seconds_total[5m])) by (pod)')."
+                        ),
+                    },
+                },
+                "required": ["query"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "loki_query",
+            "description": (
+                "Execute a LogQL query against Grafana Loki to retrieve aggregated distributed log streams."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "The LogQL query string (e.g., '{namespace=\"default\"} |= \"error\"').",
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Maximum log entries to retrieve (default: 50).",
+                    },
+                },
+                "required": ["query"],
+            },
+        },
+    },
 ]
 
 
@@ -693,6 +762,10 @@ def _k8s_list_secrets(a: dict, k8s: KubernetesOps, **_: Any) -> str:
 @_register("k8s_get_events")
 def _k8s_get_events(a: dict, k8s: KubernetesOps, **_: Any) -> str:
     return k8s.get_events(limit=a.get("limit", 20))
+
+@_register("k8s_diagnose_cluster")
+def _k8s_diagnose_cluster(a: dict, k8s: KubernetesOps, **_: Any) -> str:
+    return k8s.diagnose_cluster(namespace=a.get("namespace"))
 
 
 # ---- Gitea 도구 핸들러 ----
@@ -803,6 +876,18 @@ async def _helm_rollback(a: dict, helm: HelmOps, **_: Any) -> str:
     )
 
 
+# ---- Observability 도구 핸들러 ----
+
+@_register("prom_query")
+async def _prom_query(a: dict, obs: ObservabilityOps, **_: Any) -> str:
+    return await obs.query_prometheus(query=a["query"])
+
+
+@_register("loki_query")
+async def _loki_query(a: dict, obs: ObservabilityOps, **_: Any) -> str:
+    return await obs.query_loki(query=a["query"], limit=a.get("limit", 50))
+
+
 async def execute_tool(
     tool_name: str,
     arguments: dict[str, Any],
@@ -810,18 +895,20 @@ async def execute_tool(
     gitea: GiteaOps,
     files: FileOps,
     helm: HelmOps | None = None,
+    obs: ObservabilityOps | None = None,
 ) -> str:
     """도구 이름에 따라 레지스트리에서 핸들러를 찾아 실행합니다.
 
-    동기 핸들러(k8s, files)와 비동기 핸들러(gitea, helm)를 통합 처리합니다.
+    동기 핸들러(k8s, files)와 비동기 핸들러(gitea, helm, obs)를 통합 처리합니다.
 
     Args:
-        tool_name: 실행할 도구 이름 (예: k8s_list_pods, gitea_list_repos, file_read, helm_lint)
+        tool_name: 실행할 도구 이름 (예: k8s_list_pods, gitea_list_repos, file_read, helm_lint, prom_query)
         arguments: 도구에 전달할 인자 딕셔너리
         k8s: Kubernetes 작업 인스턴스
         gitea: Gitea 작업 인스턴스
         files: 파일시스템 작업 인스턴스
         helm: Helm 작업 인스턴스 (선택)
+        obs: 관측성(Prometheus/Loki) 작업 인스턴스 (선택)
 
     Returns:
         도구 실행 결과 문자열
@@ -832,9 +919,11 @@ async def execute_tool(
 
     if helm is None:
         helm = HelmOps(namespace=getattr(k8s, "namespace", "default"))
+    if obs is None:
+        obs = ObservabilityOps()
 
     try:
-        result = handler(arguments, k8s=k8s, gitea=gitea, files=files, helm=helm)
+        result = handler(arguments, k8s=k8s, gitea=gitea, files=files, helm=helm, obs=obs)
         if asyncio.iscoroutine(result):
             return await result
         return result

@@ -41,6 +41,7 @@ _SAFE_TOOLS = frozenset({
     "k8s_get_configmap",
     "k8s_list_secrets",
     "k8s_get_events",
+    "k8s_diagnose_cluster",
     "gitea_list_repos",
     "gitea_get_repo",
     "gitea_list_branches",
@@ -53,6 +54,8 @@ _SAFE_TOOLS = frozenset({
     "helm_status",
     "helm_lint",
     "helm_template",
+    "prom_query",
+    "loki_query",
 })
 
 
@@ -77,6 +80,22 @@ def assess_risk(
             tool_name=tool_name,
             reason="안전 모드가 비활성화되어 있습니다.",
             requires_confirmation=False,
+        )
+
+    # Read-Only 모드: SAFE 도구 외 모든 변경 작업 차단
+    if safety_mode == "read_only":
+        if tool_name in _SAFE_TOOLS:
+            return RiskAssessment(
+                level=RiskLevel.SAFE,
+                tool_name=tool_name,
+                reason="읽기 전용 무해한 조회 작업입니다.",
+                requires_confirmation=False,
+            )
+        return RiskAssessment(
+            level=RiskLevel.DESTRUCTIVE,
+            tool_name=tool_name,
+            reason=f"[Read-Only 모드] 상태 변경 도구 '{tool_name}'의 실행이 차단되었습니다.",
+            requires_confirmation=True,
         )
 
     # 1. 명시적 DESTRUCTIVE 도구

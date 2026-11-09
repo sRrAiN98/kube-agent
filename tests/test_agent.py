@@ -72,3 +72,35 @@ class TestAgentAutonomy:
             assert mock_exec.call_count == 3
             last_tool_msg = [m for m in agent._messages if m.get("role") == "tool"][-1]
             assert "[서킷 브레이커]" in last_tool_msg["content"]
+
+    @pytest.mark.asyncio
+    async def test_read_only_mode_blocks_mutations(self, agent_config: AgentConfig) -> None:
+        """read_only 모드에서는 상태 변경 작업이 즉시 차단되어야 합니다."""
+        agent_config.read_only = True
+        agent_config.safety_mode = "read_only"
+        agent_config.max_tool_iterations = 2
+
+        with (
+            patch("kubernetes.config.load_incluster_config"),
+            patch("kubernetes.client.CoreV1Api"),
+            patch("kubernetes.client.AppsV1Api"),
+            patch("kube_agent.agent.execute_tool", new_callable=AsyncMock) as mock_exec,
+        ):
+            agent = Agent(agent_config)
+            agent._llm.chat = AsyncMock(return_value={"role": "assistant", "content": "완료"})
+
+            mutation_call = {
+                "id": "tc-del",
+                "type": "function",
+                "function": {
+                    "name": "k8s_delete_pod",
+                    "arguments": '{"name": "test-pod"}',
+                },
+            }
+
+            await agent._process_tool_calls({"role": "assistant", "tool_calls": [mutation_call]})
+
+            # execute_tool은 실행되지 않아야 함
+            mock_exec.assert_not_called()
+            last_tool_msg = [m for m in agent._messages if m.get("role") == "tool"][-1]
+            assert "[Read-Only 차단]" in last_tool_msg["content"]

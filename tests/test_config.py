@@ -142,3 +142,49 @@ class TestPriorityChain:
 
         assert config.llm_model == "env-only-model"      # env 우선
         assert config.llm_base_url == _DEFAULT_LLM_URL   # 기본값 (env 없음)
+
+
+class TestYamlAndSafety:
+    """YAML 설정 로드 및 Read-Only 안전 모드를 검증합니다."""
+
+    def test_from_yaml_loads_sections(self, tmp_path) -> None:
+        yaml_content = """
+llm:
+  url: "http://my-llm:8000/v1"
+  model: "qwen-coder"
+  api_key: "secret-key"
+kubernetes:
+  namespace: "kube-system"
+  context: "prod-cluster"
+gitea:
+  url: "http://my-gitea:3000"
+  token: "git-token"
+observability:
+  prometheus_url: "http://prom:9090"
+  loki_url: "http://loki:3100"
+safety:
+  mode: "strict"
+read_only: true
+verbose: true
+"""
+        yaml_file = tmp_path / "kube-agent.yaml"
+        yaml_file.write_text(yaml_content, encoding="utf-8")
+
+        config = AgentConfig.from_yaml(yaml_file)
+        assert config.llm_base_url == "http://my-llm:8000/v1"
+        assert config.llm_model == "qwen-coder"
+        assert config.kube_namespace == "kube-system"
+        assert config.kube_context == "prod-cluster"
+        assert config.gitea_url == "http://my-gitea:3000"
+        assert config.prometheus_url == "http://prom:9090"
+        assert config.loki_url == "http://loki:3100"
+        assert config.read_only is True
+        assert config.verbose is True
+
+        resolved = config.resolve()
+        assert resolved.safety_mode == "read_only"
+
+    def test_read_only_overrides_safety_mode_in_resolve(self) -> None:
+        config = AgentConfig(safety_mode="permissive", read_only=True).resolve()
+        assert config.safety_mode == "read_only"
+
