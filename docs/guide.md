@@ -1,8 +1,15 @@
-# kube-agent 가이드
+# kube-agent 운영 및 개발 가이드
+
+> **빠른 문서 링크**:
+> - [AI 에이전트 전용 자동 설치 프로토콜](agent-installation.md)
+> - [AI Agent Guide (English)](../AGENTS.md)
+> - [프로젝트 메인 리드미](../README.md)
+
+---
 
 ## 1. 개요
 
-kube-agent는 오프라인 온프레미스 환경에서 Kubernetes 클러스터와 Gitea 저장소를 관리하기 위한 CLI 기반 AI 에이전트다. Claude Code처럼 터미널에서 자연어로 대화하면서 인프라 작업을 수행할 수 있다.
+kube-agent는 오프라인 온프레미스 환경 및 로컬 개발자 워크스테이션에서 Kubernetes 클러스터, 관측성(Prometheus/Loki), Gitea 저장소, Helm 4 차트를 관리하기 위한 자율형 AI 에이전트입니다. Claude Code나 Cursor처럼 터미널에서 자연어로 대화하며 작업할 수 있을 뿐만 아니라, 실시간 REST API/Webhook 서버(`serve`)와 AI 토큰 비용 최적화 배치(`batch`) 모드를 함께 제공합니다.
 
 외부 인터넷 없이 클러스터 내부에서 동작하도록 설계되었으며, OpenAI 호환 API를 제공하는 vLLM 또는 LiteLLM 서비스와 통신한다. 사용자는 Pod에 접속해 `kube-agent` 명령을 실행하고, 자연어로 요청하면 에이전트가 적절한 도구를 선택해 실행한다.
 

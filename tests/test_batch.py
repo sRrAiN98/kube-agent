@@ -93,3 +93,4 @@ async def test_batch_anomaly_invokes_ai_analysis(tmp_path: Path) -> None:
         content = report_file.read_text(encoding="utf-8")
         assert "ANOMALY DETECTED" in content
         assert "메모리 누수로 인한 OOMKilled 발생" in content
+

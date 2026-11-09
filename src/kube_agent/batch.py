@@ -178,3 +178,4 @@ async def run_batch_loop(
 
         console.print(f"[dim]다음 점검까지 {interval}초 대기... (종료: Ctrl+C)[/dim]")
         await asyncio.sleep(interval)
+

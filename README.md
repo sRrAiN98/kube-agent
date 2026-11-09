@@ -6,6 +6,9 @@
 [![License](https://img.shields.io/badge/license-Apache--2.0-green.svg)](LICENSE)
 [![Tests](https://img.shields.io/badge/tests-82%20passed-brightgreen.svg)]()
 
+> 🤖 **AI 에이전트 자동 셋업 프로토콜**: [`docs/agent-installation.md`](docs/agent-installation.md) \| [`AGENTS.md`](AGENTS.md)  
+> 📖 **상세 운영 및 아키텍처 가이드**: [`docs/guide.md`](docs/guide.md)
+
 오프라인 온프레미스 K8s 클러스터 및 개발자 워크스테이션 환경에서 동작하는 **자율형 인프라 AI 에이전트**.  
 Kubernetes 리소스 제어, Prometheus 메트릭 질의, Grafana Loki 분산 로그 분석, Git/Gitea 조작, Helm 4 차트 배포를 자연어로 통합 관리합니다.
 
