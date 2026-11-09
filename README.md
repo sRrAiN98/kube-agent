@@ -5,16 +5,19 @@
 
 ## 핵심 기능
 
-- **Kubernetes**: Pod/Deployment/Service/ConfigMap 조회·수정·재시작·스케일링
-- **Gitea**: 저장소 관리, Git clone/commit/push, 웹훅 설정
-- **파일**: 클론한 저장소의 파일 읽기/쓰기 (Helm chart 수정 등)
-- **자율 실행**: 복잡한 작업도 완료될 때까지 도구를 자동 호출하며 진행
+- **Kubernetes**: Pod/Deployment/Service/ConfigMap 조회·수정·재시작·스케일링 (12개 도구)
+- **Gitea**: 저장소 관리, Git clone/commit/push, 웹훅 설정 (12개 도구)
+- **Helm**: 차트 린트(`lint`), 템플릿 검증(`template`), 업그레이드/설치(`upgrade`), 롤백(`rollback`) (4개 도구)
+- **파일**: 클론한 저장소의 파일 읽기/쓰기 및 샌드박스 보안 격리 (3개 도구)
+- **안전 가드레일 (Safety)**: 리포지토리 삭제, `scale 0` 등 파괴적 명령 실행 전 사용자 대화형 승인 확인
+- **자율 실행 & 서킷 브레이커**: 목표 완결까지 도구 체이닝 및 반복 실패 조기 차단
+- **실시간 스트리밍 & 컨텍스트 압축**: Rich 실시간 토큰 렌더링 및 온프레미스 소형 LLM 컨텍스트 보존
 
 ## 빠른 시작
 
 ```bash
 # 1. 이미지 빌드
-docker build -t kube-agent:0.1.0 .
+docker build -t kube-agent:0.2.0 .
 
 # 2. Helm 설치
 cd kube-agent/helm
@@ -50,5 +53,6 @@ You: gitea에 새 저장소 만들어줘
 | `KUBE_AGENT_LLM_MODEL` | 모델명 | `gpt-4o` |
 | `KUBE_AGENT_GITEA_URL` | Gitea 서버 URL | — |
 | `KUBE_AGENT_NAMESPACE` | K8s 네임스페이스 | Pod 내 자동 감지 |
+| `KUBE_AGENT_SAFETY_MODE` | 안전 가드레일 모드 (`strict` / `permissive` / `disabled`) | `strict` |
 
 상세 가이드: [`docs/guide.md`](docs/guide.md)

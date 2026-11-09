@@ -1,0 +1,30 @@
+# Git
+.git
+.gitignore
+
+# Python bytecode and virtual environments
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.env
+.venv
+env/
+venv/
+build/
+dist/
+*.egg-info/
+
+# Tests & QA
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+tests/
+
+# Docs and Project Planning
+docs/
+helm/
+*.md
+ralph-prd.json
+

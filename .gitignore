@@ -31,3 +31,9 @@ htmlcov/
 
 # macOS
 .DS_Store
+
+# Agent planning & local artifacts
+ralph-*.json
+ralph-*.md
+RALPH_*.md
+.agents/

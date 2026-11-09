@@ -2,16 +2,14 @@
 
 from __future__ import annotations
 
-import os
-
 import pytest
 
 from kube_agent.config import (
-    AgentConfig,
     _DEFAULT_LLM_MODEL,
     _DEFAULT_LLM_URL,
     _DEFAULT_MAX_MESSAGES,
     _DEFAULT_NAMESPACE,
+    AgentConfig,
 )
 
 

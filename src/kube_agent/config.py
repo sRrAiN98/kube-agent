@@ -17,6 +17,7 @@ _DEFAULT_MAX_TOOL_ITERATIONS = 30
 _DEFAULT_MAX_AUTO_CONTINUE = 5
 _DEFAULT_GITEA_TIMEOUT = 30.0
 _DEFAULT_TOOL_RESULT_MAX_CHARS = 3000
+_DEFAULT_SAFETY_MODE = "strict"
 
 
 @dataclass
@@ -42,6 +43,8 @@ class AgentConfig:
     gitea_timeout: float = field(default=0.0)
     # 도구 실행 결과 최대 표시 글자 수 (0 = 기본값 사용)
     tool_result_max_chars: int = field(default=0)
+    # 안전 모드 ("strict", "permissive", "disabled")
+    safety_mode: str = field(default="")
 
     @classmethod
     def from_env(cls) -> AgentConfig:
@@ -77,6 +80,7 @@ class AgentConfig:
             max_auto_continue=int(os.environ.get("KUBE_AGENT_MAX_AUTO_CONTINUE", "0")),
             gitea_timeout=float(os.environ.get("KUBE_AGENT_GITEA_TIMEOUT", "0")),
             tool_result_max_chars=int(os.environ.get("KUBE_AGENT_TOOL_RESULT_MAX_CHARS", "0")),
+            safety_mode=os.environ.get("KUBE_AGENT_SAFETY_MODE", ""),
         )
 
     def merge(self, **overrides: str | bool | int | float) -> AgentConfig:
@@ -124,4 +128,5 @@ class AgentConfig:
             max_auto_continue=self.max_auto_continue or _DEFAULT_MAX_AUTO_CONTINUE,
             gitea_timeout=self.gitea_timeout or _DEFAULT_GITEA_TIMEOUT,
             tool_result_max_chars=self.tool_result_max_chars or _DEFAULT_TOOL_RESULT_MAX_CHARS,
+            safety_mode=self.safety_mode or _DEFAULT_SAFETY_MODE,
         )

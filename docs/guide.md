@@ -10,11 +10,13 @@ kube-agent는 오프라인 온프레미스 환경에서 Kubernetes 클러스터�
 
 - Kubernetes 리소스 조회 및 관리 (Pod, Deployment, Service, ConfigMap, Secret, Event)
 - Gitea 저장소 관리 (저장소 생성/삭제, 브랜치 조회, 웹훅 설정, Git 작업)
-- 총 27개 도구 내장 (Kubernetes 12개 + Gitea 12개 + 파일 3개)
-- Rich 터미널 UI로 가독성 높은 출력
+- Helm 차트 관리 (차트 린트, 템플릿 검증, 릴리스 업그레이드/설치, 롤백)
+- 총 31개 도구 내장 (Kubernetes 12개 + Gitea 12개 + Helm 4개 + 파일 3개)
+- 안전 가드레일: 파괴적 명령(저장소 삭제, scale 0 등) 실행 전 대화형 사용자 확인
+- Rich 터미널 UI (실시간 토큰 스트리밍 지원)
 - 클러스터 내 ServiceAccount를 통한 인증 (kubeconfig 불필요)
 - 환경 변수 또는 CLI 인자로 유연한 설정
-- 자율 실행 모드: 복잡한 작업도 완료될 때까지 자동으로 도구를 호출하며 진행
+- 자율 실행 & 서킷 브레이커: 동일 작업 반복 실패 조기 감지 및 자동 계속 진행
 
 ---
 
@@ -44,18 +46,22 @@ Agent Loop  <------>  LLM (OpenAI 호환 API: vLLM / LiteLLM)
 
 ```
 kube-agent/
-├── pyproject.toml          # 프로젝트 메타데이터, 의존성
-├── Dockerfile              # 멀티스테이지 빌드
+├── pyproject.toml          # 프로젝트 메타데이터, 의존성 (v0.2.0)
+├── Dockerfile              # 멀티스테이지 캐시 최적화 빌드
+├── .dockerignore           # 불필요한 파일 빌드 컨텍스트 제외
 └── src/kube_agent/
     ├── __init__.py
     ├── main.py             # Click CLI 엔트리포인트
     ├── config.py           # 환경변수/CLI 인자 설정
-    ├── agent.py            # LLM <-> Tool 루프 + 자율 실행
-    ├── llm.py              # AsyncOpenAI 클라이언트
-    ├── cli.py              # Rich 터미널 UI
-    ├── tools.py            # 27개 도구 정의 + 디스패처
+    ├── agent.py            # LLM <-> Tool 루프 + 자율 실행 + 서킷 브레이커
+    ├── llm.py              # AsyncOpenAI 클라이언트 (토큰 스트리밍 지원)
+    ├── cli.py              # Rich 터미널 UI (실시간 스트리밍 & 안전 경고)
+    ├── safety.py           # 도구 실행 위험도 평가 및 안전 가드레일
+    ├── context.py          # 컨텍스트 윈도우 보호 및 대형 도구 출력 압축
+    ├── tools.py            # 31개 도구 정의 + 디스패처
     ├── kubernetes_ops.py   # K8s 12개 작업
     ├── gitea_ops.py        # Gitea 12개 작업
+    ├── helm_ops.py         # Helm 4개 작업 (lint, template, upgrade, rollback)
     └── file_ops.py         # 파일 3개 작업 (list, read, write)
 ```
 
@@ -63,12 +69,15 @@ kube-agent/
 
 - `main.py`: Click 프레임워크로 CLI 인자를 파싱하고 에이전트를 초기화한다.
 - `config.py`: CLI 인자와 환경 변수를 통합해 설정 객체를 생성한다.
-- `agent.py`: LLM과의 대화 루프를 관리하고 도구 호출을 조율한다. 자율 실행 모드에서는 LLM이 텍스트로 응답해도 작업 완료 여부를 판단해 자동 계속 진행한다.
-- `llm.py`: AsyncOpenAI 클라이언트를 래핑해 LLM API 통신을 담당한다.
+- `agent.py`: LLM과의 대화 루프를 관리하고 도구 호출을 조율한다. 서킷 브레이커와 자율 계속 진행을 제어한다.
+- `llm.py`: AsyncOpenAI 클라이언트를 래핑해 LLM API 통신 및 실시간 토큰 스트리밍을 담당한다.
 - `cli.py`: Rich 라이브러리를 사용해 터미널 출력을 렌더링한다.
-- `tools.py`: 27개 도구의 스키마를 정의하고 실제 함수로 디스패치한다.
+- `safety.py`: 파괴적 명령(저장소 삭제, scale 0)을 감지하고 사용자 승인을 유도한다.
+- `context.py`: 오래된 대형 도구 출력을 스마트하게 요약/압축해 LLM 컨텍스트 한계를 방어한다.
+- `tools.py`: 31개 도구의 스키마를 정의하고 실제 함수로 디스패치한다.
 - `kubernetes_ops.py`: kubernetes Python 클라이언트를 사용해 K8s API를 호출한다.
 - `gitea_ops.py`: httpx로 Gitea REST API를 호출하고 subprocess로 Git CLI를 실행한다.
+- `helm_ops.py`: Helm CLI를 서브프로세스로 안전하게 래핑하여 차트 배포 및 롤백을 제어한다.
 - `file_ops.py`: 로컬 파일 목록 조회, 읽기, 쓰기를 지원한다. 보안을 위해 `/tmp`와 `/home/agent` 디렉토리만 접근 가능하다.
 
 ---

@@ -6,6 +6,7 @@ vLLM/LiteLLM 등 OpenAI 호환 API를 통해 LLM과 통신합니다.
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from typing import Any
 
 from openai import AsyncOpenAI
@@ -22,6 +23,7 @@ SYSTEM_PROMPT = (
     "- Kubernetes: list/get/create/update/delete pods, deployments, services, configmaps, "
     "secrets, and perform rolling restarts and scaling.\n"
     "- Gitea: manage repositories, branches, files, and webhooks via REST API and Git CLI.\n"
+    "- Helm: lint charts, render templates, upgrade/install releases, and rollback.\n"
     "- Files: list, read, and write files in the local workspace (for editing cloned repos).\n\n"
     "## Autonomous Execution Rules\n"
     "You MUST work autonomously until the user's task is FULLY completed. Follow these rules:\n"
@@ -70,12 +72,14 @@ class LLMClient:
         self,
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]] | None = None,
+        on_token: Callable[[str], None] | None = None,
     ) -> dict[str, Any]:
-        """LLM에 채팅 완성 요청을 보냅니다.
+        """LLM에 채팅 완성 요청을 보냅니다 (실시간 토큰 스트리밍 지원).
 
         Args:
             messages: OpenAI 형식의 메시지 리스트 (role, content 포함)
             tools: OpenAI 형식의 도구 정의 리스트 (선택)
+            on_token: 토큰 수신 시 호출할 콜백 함수 (제공 시 실시간 스트리밍 활성화)
 
         Returns:
             응답 메시지 딕셔너리. 키:
@@ -97,9 +101,55 @@ class LLMClient:
 
             if self._verbose:
                 logger.debug(
-                    "LLM request: model=%s, messages=%d, tools=%d", self._model, len(messages), len(tools or [])
+                    "LLM request: model=%s, messages=%d, tools=%d",
+                    self._model,
+                    len(messages),
+                    len(tools or []),
                 )
 
+            # 1. 실시간 스트리밍 모드
+            if on_token is not None:
+                kwargs["stream"] = True
+                stream_resp = await self._client.chat.completions.create(**kwargs)
+                content_acc: list[str] = []
+                tool_calls_acc: dict[int, dict[str, Any]] = {}
+
+                async for chunk in stream_resp:
+                    if not chunk.choices:
+                        continue
+                    delta = chunk.choices[0].delta
+                    if delta.content:
+                        content_acc.append(delta.content)
+                        on_token(delta.content)
+                    if delta.tool_calls:
+                        for tc in delta.tool_calls:
+                            idx = tc.index
+                            if idx not in tool_calls_acc:
+                                tool_calls_acc[idx] = {
+                                    "id": tc.id or "",
+                                    "type": "function",
+                                    "function": {
+                                        "name": tc.function.name or "" if tc.function else "",
+                                        "arguments": "",
+                                    },
+                                }
+                            else:
+                                if tc.id:
+                                    tool_calls_acc[idx]["id"] += tc.id
+                                if tc.function and tc.function.name:
+                                    tool_calls_acc[idx]["function"]["name"] += tc.function.name
+                            if tc.function and tc.function.arguments:
+                                tool_calls_acc[idx]["function"]["arguments"] += tc.function.arguments
+
+                result: dict[str, Any] = {
+                    "role": "assistant",
+                    "content": "".join(content_acc),
+                }
+                if tool_calls_acc:
+                    result["tool_calls"] = [tool_calls_acc[i] for i in sorted(tool_calls_acc.keys())]
+                return result
+
+            # 2. 비스트리밍 단일 응답 모드
             response = await self._client.chat.completions.create(**kwargs)
             message = response.choices[0].message
 
@@ -112,7 +162,7 @@ class LLMClient:
                 )
 
             # 응답을 직렬화 가능한 딕셔너리로 변환
-            result: dict[str, Any] = {
+            result = {
                 "role": "assistant",
                 "content": message.content or "",
             }

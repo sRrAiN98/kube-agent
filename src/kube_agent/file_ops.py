@@ -7,7 +7,6 @@ Git clone 후 로컬 파일을 조회하고 편집하기 위한 파일 조작 �
 from __future__ import annotations
 
 import logging
-import os
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -40,12 +39,12 @@ class FileOps:
             검증 통과 시 None, 실패 시 오류 메시지 문자열
         """
         try:
-            resolved = str(Path(path).resolve())
+            resolved = Path(path).resolve()
         except (OSError, ValueError) as exc:
             return f"경로를 확인할 수 없습니다: {exc}"
 
         for sandbox in _SANDBOX_DIRS:
-            if resolved.startswith(sandbox):
+            if resolved.is_relative_to(Path(sandbox).resolve()):
                 return None
 
         return f"보안 제한: '{path}'에 접근할 수 없습니다. 허용된 디렉토리: {', '.join(_SANDBOX_DIRS)}"

@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "kube-agent"
-version = "0.1.0"
+version = "0.2.0"
 description = "CLI-based AI agent for Kubernetes and Gitea management in offline environments"
 requires-python = ">=3.11"
 license = "Apache-2.0"
@@ -26,6 +26,7 @@ dev = [
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+pythonpath = ["src"]
 
 [project.scripts]
 kube-agent = "kube_agent.main:main"

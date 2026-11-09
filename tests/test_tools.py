@@ -2,12 +2,11 @@
 
 from __future__ import annotations
 
-import asyncio
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from kube_agent.tools import TOOLS, _TOOL_REGISTRY, execute_tool
+from kube_agent.tools import _TOOL_REGISTRY, TOOLS, execute_tool
 
 
 class TestRegistry:
@@ -101,3 +100,26 @@ class TestExecuteTool:
         )
         assert result == "파일 생성 완료"
         files.write_file.assert_called_once_with(path="/tmp/f.txt", content="hello", create_dirs=True)
+
+    @pytest.mark.asyncio
+    async def test_helm_upgrade_dispatched(self, mocks) -> None:
+        k8s, gitea, files = mocks
+        mock_helm = AsyncMock()
+        mock_helm.upgrade.return_value = "helm upgrade ok"
+
+        result = await execute_tool(
+            "helm_upgrade",
+            {"release_name": "my-app", "chart_path": "./charts/app"},
+            k8s,
+            gitea,
+            files,
+            helm=mock_helm,
+        )
+        assert result == "helm upgrade ok"
+        mock_helm.upgrade.assert_awaited_once_with(
+            release_name="my-app",
+            chart_path="./charts/app",
+            values_file=None,
+            install=True,
+            namespace=None,
+        )

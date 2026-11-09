@@ -16,10 +16,13 @@ from prompt_toolkit.history import InMemoryHistory
 
 from kube_agent import cli
 from kube_agent.config import AgentConfig
+from kube_agent.context import ContextManager
 from kube_agent.file_ops import FileOps
 from kube_agent.gitea_ops import GiteaOps
+from kube_agent.helm_ops import HelmOps
 from kube_agent.kubernetes_ops import KubernetesOps
 from kube_agent.llm import SYSTEM_PROMPT, LLMClient
+from kube_agent.safety import assess_risk
 from kube_agent.tools import TOOLS, execute_tool
 
 logger = logging.getLogger(__name__)
@@ -50,21 +53,16 @@ class Agent:
             timeout=config.gitea_timeout,
         )
         self._files = FileOps()
+        self._helm = HelmOps(namespace=config.kube_namespace)
+        self._context_mgr = ContextManager(max_messages=config.max_messages or 60)
+        self._failed_calls: dict[str, int] = {}
         self._messages: list[dict[str, Any]] = [
             {"role": "system", "content": SYSTEM_PROMPT},
         ]
 
     def _trim_messages(self) -> None:
-        """메시지 히스토리가 너무 길면 오래된 메시지를 제거합니다.
-
-        시스템 프롬프트는 항상 유지하고, 나머지 메시지 중
-        오래된 것부터 제거하여 max_messages 이하로 유지합니다.
-        """
-        max_messages = self._config.max_messages
-        if len(self._messages) > max_messages:
-            # 시스템 프롬프트(첫 번째)는 유지
-            system = self._messages[0]
-            self._messages = [system] + self._messages[-(max_messages - 1) :]
+        """컨텍스트 관리자를 통해 오래된 도구 출력을 압축하고 메시지를 최적화합니다."""
+        self._messages = self._context_mgr.compact(self._messages)
 
     async def _process_tool_calls(self, response: dict[str, Any]) -> dict[str, Any]:
         """LLM 응답의 tool_calls를 처리하고 재귀적으로 LLM을 다시 호출합니다.
@@ -101,6 +99,51 @@ class Agent:
 
                 cli.print_tool_call(tool_name)
 
+                # 서킷 브레이커: 동일 인자 반복 실패 차단
+                call_signature = f"{tool_name}:{raw_args}"
+                if self._failed_calls.get(call_signature, 0) >= 3:
+                    result = (
+                        f"[서킷 브레이커] 동일한 인자의 도구 '{tool_name}' 호출이 3회 연속 실패하여 "
+                        "반복 실행을 차단했습니다. 다른 접근 방식을 시도하거나 사용자에게 보고하세요."
+                    )
+                    cli.print_tool_result(
+                        tool_name, result, max_chars=self._config.tool_result_max_chars
+                    )
+                    self._messages.append(
+                        {
+                            "role": "tool",
+                            "tool_call_id": tool_id,
+                            "content": result,
+                        }
+                    )
+                    continue
+
+                # 안전 가드레일 검사
+                assessment = assess_risk(
+                    tool_name=tool_name,
+                    arguments=arguments,
+                    safety_mode=self._config.safety_mode,
+                )
+                if assessment.requires_confirmation:
+                    cli.print_safety_warning(assessment)
+                    confirmed = cli.ask_confirmation()
+                    if not confirmed:
+                        result = (
+                            f"[안전 차단] 사용자가 작업을 거부했습니다 ({assessment.reason}). "
+                            "작업을 중단하고 대안을 제안하세요."
+                        )
+                        cli.print_tool_result(
+                            tool_name, result, max_chars=self._config.tool_result_max_chars
+                        )
+                        self._messages.append(
+                            {
+                                "role": "tool",
+                                "tool_call_id": tool_id,
+                                "content": result,
+                            }
+                        )
+                        continue
+
                 # 도구 실행
                 result = await execute_tool(
                     tool_name=tool_name,
@@ -108,7 +151,15 @@ class Agent:
                     k8s=self._k8s,
                     gitea=self._gitea,
                     files=self._files,
+                    helm=self._helm,
                 )
+
+                # 실패 기록 추적 (서킷 브레이커용)
+                res_lower = result.lower()
+                if "실패" in result or "오류" in result or "error" in res_lower or "exception" in res_lower:
+                    self._failed_calls[call_signature] = self._failed_calls.get(call_signature, 0) + 1
+                else:
+                    self._failed_calls.pop(call_signature, None)
 
                 cli.print_tool_result(tool_name, result, max_chars=self._config.tool_result_max_chars)
 
@@ -134,17 +185,49 @@ class Agent:
     def _needs_continuation(response: dict[str, Any]) -> bool:
         """텍스트 응답(tool_calls 없음)이 왔을 때 계속 진행이 필요한지 판단합니다.
 
-        시스템 프롬프트가 "작업 완료 전까지 텍스트 응답 금지"를 지시하므로,
-        tool_calls 없이 텍스트가 반환된 경우 작업이 완료된 것으로 간주합니다.
-        키워드 휴리스틱은 오탐(false-positive)을 유발하므로 사용하지 않습니다.
+        LLM이 중간 계획이나 다음 작업 예정 사항만 텍스트로 말하고
+        도구 호출을 중단한 경우(조기 종료)를 감지하여 자율 계속 진행을 유도합니다.
 
         Args:
             response: LLM 응답 딕셔너리
 
         Returns:
-            항상 False (텍스트 응답 = 작업 완료)
+            계속 진행 필요 시 True, 작업 완료 시 False
         """
-        return False
+        content = response.get("content", "").strip().lower()
+        if not content:
+            return False
+
+        # 작업 완료 지표 (이 중 하나라도 있으면 완료된 것으로 간주)
+        completion_markers = (
+            "완료되었습니다",
+            "작업 완료",
+            "성공적으로",
+            "종료되었습니다",
+            "모든 작업이 완료",
+            "정상적으로 처리되었습니다",
+            "task completed",
+            "successfully finished",
+            "all steps completed",
+        )
+        if any(marker in content for marker in completion_markers):
+            return False
+
+        # 미완료/진행 예정 지표
+        continuation_markers = (
+            "다음 단계로",
+            "이제 ",
+            "이어서 ",
+            "진행하겠습니다",
+            "수정하겠습니다",
+            "실행하겠습니다",
+            "확인하겠습니다",
+            "next, i will",
+            "now proceeding",
+            "let's proceed",
+            "i will now",
+        )
+        return any(marker in content for marker in continuation_markers)
 
     async def _handle_user_input(self, user_input: str) -> None:
         """사용자 입력을 처리하고 자율 실행 모드로 LLM 응답을 처리합니다.
@@ -165,20 +248,34 @@ class Agent:
         cli.print_thinking()
 
         for round_idx in range(self._config.max_auto_continue + 1):
-            # LLM 호출
+            started_streaming = False
+
+            def on_token(token: str) -> None:
+                nonlocal started_streaming
+                if not started_streaming:
+                    cli.start_stream_response()
+                    started_streaming = True
+                cli.print_stream_token(token)
+
+            # LLM 호출 (토큰 스트리밍 연동)
             response = await self._llm.chat(
                 messages=self._messages,
                 tools=TOOLS,
+                on_token=on_token,
             )
+
+            if started_streaming:
+                cli.end_stream_response()
 
             # tool_calls가 있으면 모두 처리한 후 최종 응답 받음
             if "tool_calls" in response:
                 response = await self._process_tool_calls(response)
 
-            # 텍스트 응답 표시
+            # 텍스트 응답 표시 (이미 스트리밍되지 않은 경우에만 전체 출력)
             content = response.get("content", "")
             if content:
-                cli.print_agent_response(content)
+                if not started_streaming:
+                    cli.print_agent_response(content)
                 self._messages.append({"role": "assistant", "content": content})
             else:
                 cli.print_info("(no response)")

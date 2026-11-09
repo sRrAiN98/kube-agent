@@ -8,10 +8,12 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 from kube_agent.file_ops import FileOps
 from kube_agent.gitea_ops import GiteaOps
+from kube_agent.helm_ops import HelmOps
 from kube_agent.kubernetes_ops import KubernetesOps
 
 logger = logging.getLogger(__name__)
@@ -469,7 +471,9 @@ TOOLS: list[dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "file_list",
-            "description": "List files and directories at the given path. Use after cloning a repo to explore its structure.",
+            "description": (
+                "List files and directories at the given path. Use after cloning a repo to explore its structure."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -525,6 +529,115 @@ TOOLS: list[dict[str, Any]] = [
                     },
                 },
                 "required": ["path", "content"],
+            },
+        },
+    },
+    # ---- Helm 도구 ----
+    {
+        "type": "function",
+        "function": {
+            "name": "helm_lint",
+            "description": "Lint a Helm chart directory to examine it for syntax and best practice issues.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "chart_path": {
+                        "type": "string",
+                        "description": "Path to the chart directory to lint.",
+                    },
+                    "values_file": {
+                        "type": "string",
+                        "description": "Optional path to a custom values.yaml file.",
+                    },
+                },
+                "required": ["chart_path"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "helm_template",
+            "description": "Render chart templates locally and display the generated Kubernetes manifests.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {
+                        "type": "string",
+                        "description": "Release name for template rendering.",
+                    },
+                    "chart_path": {
+                        "type": "string",
+                        "description": "Path to the chart directory.",
+                    },
+                    "values_file": {
+                        "type": "string",
+                        "description": "Optional path to a custom values.yaml file.",
+                    },
+                    "namespace": {
+                        "type": "string",
+                        "description": "Target Kubernetes namespace (optional).",
+                    },
+                },
+                "required": ["name", "chart_path"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "helm_upgrade",
+            "description": "Upgrade an existing release or install if it does not exist (--install).",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "release_name": {
+                        "type": "string",
+                        "description": "Name of the release to upgrade/install.",
+                    },
+                    "chart_path": {
+                        "type": "string",
+                        "description": "Path to the chart directory.",
+                    },
+                    "values_file": {
+                        "type": "string",
+                        "description": "Optional path to a custom values.yaml file.",
+                    },
+                    "install": {
+                        "type": "boolean",
+                        "description": "Install if release does not exist (default: true).",
+                    },
+                    "namespace": {
+                        "type": "string",
+                        "description": "Target Kubernetes namespace (optional).",
+                    },
+                },
+                "required": ["release_name", "chart_path"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "helm_rollback",
+            "description": "Rollback a Helm release to a previous revision.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "release_name": {
+                        "type": "string",
+                        "description": "Name of the release to rollback.",
+                    },
+                    "revision": {
+                        "type": "integer",
+                        "description": "Revision number to rollback to (0 for previous).",
+                    },
+                    "namespace": {
+                        "type": "string",
+                        "description": "Target Kubernetes namespace (optional).",
+                    },
+                },
+                "required": ["release_name"],
             },
         },
     },
@@ -610,7 +723,12 @@ async def _gitea_list_users(a: dict, gitea: GiteaOps, **_: Any) -> str:
 
 @_register("gitea_create_webhook")
 async def _gitea_create_webhook(a: dict, gitea: GiteaOps, **_: Any) -> str:
-    return await gitea.create_webhook(owner=a["owner"], repo=a["repo"], target_url=a["target_url"], events=a.get("events"))
+    return await gitea.create_webhook(
+        owner=a["owner"],
+        repo=a["repo"],
+        target_url=a["target_url"],
+        events=a.get("events"),
+    )
 
 @_register("gitea_list_webhooks")
 async def _gitea_list_webhooks(a: dict, gitea: GiteaOps, **_: Any) -> str:
@@ -648,23 +766,62 @@ def _file_write(a: dict, files: FileOps, **_: Any) -> str:
     return files.write_file(path=a["path"], content=a["content"], create_dirs=a.get("create_dirs", False))
 
 
+# ---- Helm 도구 핸들러 ----
+
+@_register("helm_lint")
+async def _helm_lint(a: dict, helm: HelmOps, **_: Any) -> str:
+    return await helm.lint(chart_path=a["chart_path"], values_file=a.get("values_file"))
+
+
+@_register("helm_template")
+async def _helm_template(a: dict, helm: HelmOps, **_: Any) -> str:
+    return await helm.template(
+        name=a["name"],
+        chart_path=a["chart_path"],
+        values_file=a.get("values_file"),
+        namespace=a.get("namespace"),
+    )
+
+
+@_register("helm_upgrade")
+async def _helm_upgrade(a: dict, helm: HelmOps, **_: Any) -> str:
+    return await helm.upgrade(
+        release_name=a["release_name"],
+        chart_path=a["chart_path"],
+        values_file=a.get("values_file"),
+        install=a.get("install", True),
+        namespace=a.get("namespace"),
+    )
+
+
+@_register("helm_rollback")
+async def _helm_rollback(a: dict, helm: HelmOps, **_: Any) -> str:
+    return await helm.rollback(
+        release_name=a["release_name"],
+        revision=a.get("revision", 0),
+        namespace=a.get("namespace"),
+    )
+
+
 async def execute_tool(
     tool_name: str,
     arguments: dict[str, Any],
     k8s: KubernetesOps,
     gitea: GiteaOps,
     files: FileOps,
+    helm: HelmOps | None = None,
 ) -> str:
     """도구 이름에 따라 레지스트리에서 핸들러를 찾아 실행합니다.
 
-    동기 핸들러(k8s, files)와 비동기 핸들러(gitea)를 통합 처리합니다.
+    동기 핸들러(k8s, files)와 비동기 핸들러(gitea, helm)를 통합 처리합니다.
 
     Args:
-        tool_name: 실행할 도구 이름 (예: k8s_list_pods, gitea_list_repos, file_read)
+        tool_name: 실행할 도구 이름 (예: k8s_list_pods, gitea_list_repos, file_read, helm_lint)
         arguments: 도구에 전달할 인자 딕셔너리
         k8s: Kubernetes 작업 인스턴스
         gitea: Gitea 작업 인스턴스
         files: 파일시스템 작업 인스턴스
+        helm: Helm 작업 인스턴스 (선택)
 
     Returns:
         도구 실행 결과 문자열
@@ -673,8 +830,11 @@ async def execute_tool(
     if handler is None:
         return f"알 수 없는 도구: {tool_name}"
 
+    if helm is None:
+        helm = HelmOps(namespace=getattr(k8s, "namespace", "default"))
+
     try:
-        result = handler(arguments, k8s=k8s, gitea=gitea, files=files)
+        result = handler(arguments, k8s=k8s, gitea=gitea, files=files, helm=helm)
         if asyncio.iscoroutine(result):
             return await result
         return result

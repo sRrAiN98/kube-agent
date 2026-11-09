@@ -6,6 +6,8 @@ prompt_toolkit을 사용한 인터랙티브 입력을 제공합니다.
 
 from __future__ import annotations
 
+from typing import Any
+
 from rich.console import Console
 from rich.markdown import Markdown
 from rich.panel import Panel
@@ -90,6 +92,26 @@ def print_agent_response(content: str) -> None:
         console.print(content)
 
 
+def start_stream_response() -> None:
+    """실시간 스트리밍 응답 헤더를 출력합니다."""
+    console.print()
+    console.print(Text("Agent: ", style="agent"), end="")
+
+
+def print_stream_token(token: str) -> None:
+    """실시간 스트리밍 토큰을 콘솔에 즉시 출력합니다.
+
+    Args:
+        token: 수신된 단일 토큰/텍스트 조각
+    """
+    console.print(token, end="")
+
+
+def end_stream_response() -> None:
+    """실시간 스트리밍 응답 출력을 마감합니다."""
+    console.print()
+
+
 def print_tool_call(tool_name: str) -> None:
     """도구 호출을 표시합니다.
 
@@ -153,3 +175,39 @@ def print_auto_continue(round_num: int, max_rounds: int) -> None:
     """
     console.print()
     console.print(f"[info](자율 실행 중... {round_num}/{max_rounds})[/info]")
+
+
+def print_safety_warning(assessment: Any) -> None:
+    """도구 실행 안전 경고를 출력합니다.
+
+    Args:
+        assessment: RiskAssessment 객체
+    """
+    border = "red" if getattr(assessment, "level", "") == "DESTRUCTIVE" else "yellow"
+    title = f"[bold red]SAFETY WARNING: {getattr(assessment, 'level', 'UNKNOWN')}[/bold red]"
+    panel = Panel(
+        f"[bold]Tool:[/bold] {getattr(assessment, 'tool_name', '')}\n"
+        f"[bold]Reason:[/bold] {getattr(assessment, 'reason', '')}",
+        title=title,
+        border_style=border,
+    )
+    console.print()
+    console.print(panel)
+
+
+def ask_confirmation(prompt_text: str = "위 작업을 계속 진행하시겠습니까? (y/N): ") -> bool:
+    """사용자에게 작업 진행 여부를 확인합니다.
+
+    Args:
+        prompt_text: 사용자에게 표시할 확인 프롬프트
+
+    Returns:
+        승인 시 True, 거부 또는 취소 시 False
+    """
+    try:
+        console.print(f"[bold yellow]{prompt_text}[/bold yellow]", end="")
+        ans = input().strip().lower()
+        return ans in ("y", "yes")
+    except (EOFError, KeyboardInterrupt):
+        console.print()
+        return False
